@@ -1,0 +1,3 @@
+[submodule "MOFA-in-allo-SCT"]
+	path = MOFA-in-allo-SCT
+	url = https://github.com/guardianre/MOFA-in-allo-SCT.git
