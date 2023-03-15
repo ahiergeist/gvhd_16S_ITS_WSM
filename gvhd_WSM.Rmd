@@ -1,0 +1,3226 @@
+---
+title: '**aSCT_slected**'
+subtitle: "| Metagenome \n| \n| \n"
+author:
+  - "| *Andreas Hiergeist*\n"
+date: "(`r format(Sys.time(), '%A, %d %B %Y, %H:%M:%S')`)"
+output:
+  html_document:
+    keep_md: TRUE
+    toc: TRUE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE,warning=FALSE,message=FALSE,error=FALSE, results='hide',dev='png',dpi = 400)
+
+
+library(MicrobiotaProcess)
+library(dplyr)
+library(tidyr)
+library(TreeSummarizedExperiment)
+library(ggplot2)
+library(mia)
+library(miaViz)
+library(ggpubr)
+library(rstatix)
+library(ggprism)
+library(compositions)
+library(cowplot)
+library(scater)
+library(patchwork)
+library(tidySummarizedExperiment)
+library(ANCOMBC)
+library(ALDEx2)
+library(readxl)
+library(knitr)
+library(tidyverse)
+library(microbiomeMarker)
+library(microViz)
+library(microbiomeutilities)
+library(RColorBrewer)
+library(SEtools)
+library(pheatmap)
+library(ape)
+library(ggtree)
+library(kableExtra)
+library(SQMtools)
+library(Maaslin2)
+library(DESeq2)
+library(vegan)
+library(EnhancedVolcano)
+library(lefser)
+library(rmarkdown)
+library(ggforce)
+
+
+colours.erik.gvhd<-c("#0095ff","#ff2500")
+
+colours.post_allo_index5_post<-c("high_7_14" = "#0095ff",
+                                "low_7_14" = "#ff2500")
+
+selected_families<-c("Lachnospiraceae","Oscillospiraceae")
+
+colours.list.pre_allo_factor1<-c("high_COND" = "#cd3363",
+                                 "low_COND" = "#3392c5",
+                                 "low_7_14" = "#99c9e2")
+
+
+colours.list.pre_allo_factor3<-c("high_COND" = "#cd3363",
+                                 "high_7_14" = "#e699b1",
+                                 "low_COND" = "#3392c5",
+                                 "low_7_14" = "#99c9e2")
+
+
+
+colours.list.pre_allo_factor3_lateTP<-c("high_7_14" = "#0095ff",
+                                "low_7_14" = "#ff2500")
+
+
+
+#import TreeSummarizedExperiment data from rds files
+
+tse.metaphlan<-readRDS("./data/tse_metaphlan.rds")
+tse.humann_pathabundance<-readRDS("./data/tse.humann_pathabundance.rds")
+tse.humann_pathabundance_stratified<-readRDS("./data/tse.humann_pathabundance_stratified.rds")
+tse.sqm.kegg<-readRDS("./data/tse.sqm.kegg.rds")
+tse.humann_genefamilies_ko_stratified<-readRDS("./data/tse.humann_genefamilies_ko_stratified.rds")
+
+
+```
+
+# Selection metadata
+
+## Maaslin2: post_allo_index5_post
+
+```{r post_allo_index5_post}
+#subset TSE by colData
+tse.subset<-tse.metaphlan[,colData(tse.metaphlan)$post_allo_index5_post %in% c("high_COND","high_7_14","low_COND","low_7_14")]
+
+#remove zOTUs with zero counts after subsetting
+tse.subset<-tse.subset[rowSums(assay(tse.subset, "counts")) > 0, ]
+
+
+# maaslin2
+
+# maaslin expects features as columns and samples as rows 
+# for both the asv/otu table as well as meta data 
+asv <- t(assay(tse.subset))
+meta_data <- data.frame(colData(tse.subset))
+# you can specifiy different GLMs/normalizations/transforms. We used similar
+# settings as in Nearing et al. (2021) here:
+fit_data_post_allo_index5_post <- Maaslin2(
+  asv,
+  meta_data,
+  output = "maaslin2_post_allo_index5_post",
+  transform = "LOG",
+  cores = 50,
+  fixed_effects = "post_allo_index5_post",
+  #random_effects = c("Patient"), # you can also fit MLM by specifying random effects
+  # specifying a ref is especially important if you have more than 2 levels
+  reference = "post_allo_index5_post,high_7_14",  
+  normalization = "NONE",
+  standardize = FALSE,
+  min_prevalence = 0 # prev filterin already done
+)
+
+```
+
+```{r post_allo_index5_post kable,results="asis"}
+
+tax<-rowData(tse.subset)
+tax$feature<-rownames(tax)
+res<-left_join(data.frame(fit_data_post_allo_index5_post$results),tax,by="feature",copy=TRUE)
+
+kable(data.frame(filter(res, pval <= 0.05)),format = "html") %>% kable_styling(latex_options = "scale_down",font_size = 11) %>%kable_classic(full_width = F, html_font = "Cambria")
+
+```
+
+```{r maaslin2 sig features post_allo_index5_post,results=T,eval=TRUE,fig.dim=c(10,7),out.width="100%"}
+
+
+sig_maaslin2<-filter(res, pval <= 0.05)
+mat<-assay(tse.subset,"counts")
+mat.selected<-mat[row.names(mat) %in% sig_maaslin2$feature,]
+mat_mapping<-cbind(t(mat.selected),data.frame(colData(tse.subset)))
+test<-pivot_longer(mat_mapping,cols = starts_with("s__"))
+
+
+
+
+p<-ggplot(test,aes(name,log(value+1),fill=post_allo_index5_post))
+p+geom_boxplot(outlier.shape = NA) +
+  coord_flip()+
+  #facet_wrap(~name,scales="free")+
+  geom_jitter()+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  xlab("Group")+
+  ylab("Relative Abundance")
+
+```
+
+## Heatmap
+
+```{r pheatmap maaslin metaphlan post_allo_index5_post,eval=TRUE,fig.dim=c(14,9),out.width="100%"}
+
+#  Pheatmap
+
+tse.temp <- tse.subset[rownames(tse.subset)%in% sig_maaslin2$feature ,]
+
+tse.temp <- transformSamples(tse.temp, method = "clr", abund_values = "counts",pseudocount = 1)
+# Add z-transformation on features (taxa)
+tse.temp <- transformFeatures(tse.temp, abund_values = "clr", method = "z", name = "clr_z")
+
+# Get n most abundant taxa, and subsets the data by them
+top_taxa <- getTopTaxa(tse.temp, top = length(sig_maaslin2$feature))
+tse.temp <- tse.temp[top_taxa, ]
+
+# Gets the assay table
+mat <- assay(tse.temp, "clr_z")
+rownames(mat)<-rowData(tse.temp)$Species
+
+
+# Cluster Features / Taxa
+
+
+# Hierarchical clustering
+taxa_hclust <- hclust(dist(mat), method = "complete")
+
+# Creates a phylogenetic tree
+taxa_tree <- ape::as.phylo(taxa_hclust)
+
+# Plot taxa tree
+taxa_tree <- ggtree(taxa_tree) + 
+  theme(plot.margin=margin(0,0,0,0)) # removes margins
+
+# Get order of taxa in plot
+taxa_ordered <- get_taxa_name(taxa_tree)
+
+# to view the tree, run
+# taxa_tree
+
+
+
+# Creates clusters (e.g. 3 clusters)
+taxa_clusters <- cutree(tree = taxa_hclust, k = 5)
+
+# Converts into data frame
+taxa_clusters <- data.frame(clusters = taxa_clusters)
+taxa_clusters$clusters <- factor(taxa_clusters$clusters)
+
+# Order data so that it's same as in phylo tree
+taxa_clusters <- taxa_clusters[taxa_ordered, , drop = FALSE] 
+
+# Prints taxa and their clusters
+taxa_clusters
+
+
+# Adds information to rowData
+rowData(tse.temp)$clusters <- taxa_clusters[order(match(rownames(taxa_clusters), 
+                                                                 rownames(tse.temp))), ]
+
+
+## Cluster Samples
+
+# Hierarchical clustering
+sample_hclust <- hclust(dist(t(mat)), method = "complete")
+
+# Creates a phylogenetic tree
+sample_tree <- as.phylo(sample_hclust)
+
+# Plot sample tree
+sample_tree <- ggtree(sample_tree) + layout_dendrogram() + 
+  theme(plot.margin=margin(0,0,0,0)) # removes margins
+
+# Get order of samples in plot
+samples_ordered <- rev(get_taxa_name(sample_tree))
+
+# to view the tree, run
+# sample_tree
+
+# Creates clusters
+sample_clusters <- factor(cutree(tree = sample_hclust, k = 8))
+
+# Converts into data frame
+sample_data <- data.frame(clusters = sample_clusters)
+
+# Order data so that it's same as in phylo tree
+sample_data <- sample_data[samples_ordered, , drop = FALSE] 
+
+# Order data based on 
+tse.temp <- tse.temp[ , rownames(sample_data)]
+
+# Add sample type data
+sample_data$Antibiotic_therapy <-colData(tse.temp)$Antibiotic_therapy
+sample_data$GvHD.all_01 <-colData(tse.temp)$GvHD.all_01
+sample_data$post_allo_index5_post <-colData(tse.temp)$post_allo_index5_post
+
+
+sample_data$clusters<-NULL
+
+
+# Determines the scaling of colorss
+# Scale colors
+breaks <- seq(-ceiling(max(abs(mat))), ceiling(max(abs(mat))), 
+              length.out = ifelse( max(abs(mat))>5, 2*ceiling(max(abs(mat))), 10 ) )
+colors <- colorRampPalette(c("darkblue", "blue", "white", "red", "darkred"))(length(breaks)-1)
+
+#ann_colours<-list(Timepoints=Timepoints.colours,Center = Center.colours)
+
+pheatmap(mat, 
+         #annotation_row = taxa_clusters, 
+        annotation_col = sample_data,
+        #annotation_colors = ann_colours,
+        #breaks = breaks,
+        #color = colors,
+        cluster_cols = TRUE,cluster_rows=FALSE,
+        show_colnames=FALSE)
+         
+```
+
+## Maaslin2: pre_allo_factor1
+
+```{r pre_allo_factor1}
+#subset TSE by colData
+tse.subset<-tse.metaphlan[,colData(tse.metaphlan)$pre_allo_factor1 %in% c("high_COND","high_7_14","low_COND","low_7_14")]
+
+#remove zOTUs with zero counts after subsetting
+tse.subset<-tse.subset[rowSums(assay(tse.subset, "counts")) > 0, ]
+
+
+# maaslin2
+
+# maaslin expects features as columns and samples as rows 
+# for both the asv/otu table as well as meta data 
+asv <- t(assay(tse.subset))
+meta_data <- data.frame(colData(tse.subset))
+# you can specifiy different GLMs/normalizations/transforms. We used similar
+# settings as in Nearing et al. (2021) here:
+fit_data_pre_allo_factor1 <- Maaslin2(
+  asv,
+  meta_data,
+  output = "maaslin2_pre_allo_factor1",
+  transform = "LOG",
+  cores = 50,
+  fixed_effects = "pre_allo_factor1",
+  random_effects = c("Patient"), # you can also fit MLM by specifying random effects
+  # specifying a ref is especially important if you have more than 2 levels
+  reference = "pre_allo_factor1,high_COND",  
+  normalization = "NONE",
+  standardize = FALSE,
+  min_prevalence = 0 # prev filterin already done
+)
+# which genera are identified as differentially abundant? (leave out "head" to
+# see all)
+
+```
+
+```{r pre_allo_factor1 kable,results="asis"}
+
+tax<-rowData(tse.subset)
+tax$feature<-rownames(tax)
+res<-left_join(data.frame(fit_data_pre_allo_factor1$results),tax,by="feature",copy=TRUE)
+
+kable(data.frame(filter(res, qval <= 0.2)),format = "html") %>% kable_styling(latex_options = "scale_down",font_size = 11) %>%kable_classic(full_width = F, html_font = "Cambria")
+
+```
+
+```{r maaslin2 sig features pre_allo_factor1,results=T,eval=TRUE,fig.dim=c(12,10),out.width="100%"}
+
+
+sig_maaslin2<-filter(res, qval <= 0.2)
+mat<-assay(tse.subset,"counts")
+mat.selected<-mat[row.names(mat) %in% sig_maaslin2$feature,]
+mat_mapping<-cbind(t(mat.selected),data.frame(colData(tse.subset)))
+test<-pivot_longer(mat_mapping,cols = starts_with("s__")) %>% 
+  mutate(pre_allo_factor1=factor(pre_allo_factor1,levels=c("high_COND","low_COND","low_7_14")))
+
+
+
+
+p<-ggplot(test,aes(name,log(value+1),fill=pre_allo_factor1))
+p+geom_boxplot(outlier.shape = NA) +
+  coord_flip()+
+  #facet_wrap(~name,scales="free")+
+  geom_jitter()+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  xlab("Group")+
+  ylab("Relative Abundance")
+
+```
+
+```{r pheatmap species pre_allo_factor1 maaslin_allSpecies,eval=TRUE,fig.dim=c(7,7),out.width="100%"}
+
+sig_maaslin2<-filter(res, qval <= 0.25)
+
+tse.temp <- tse.subset[rownames(tse.subset)%in% sig_maaslin2$feature ,colData(tse.subset)$pre_allo_factor1 %in% c("high_COND","high_7_14","low_COND","low_7_14")]
+
+tse.temp<-tse.temp[rowSums(assay(tse.temp, "counts")) > 0, ]
+
+
+# Agglomerate tse.V3V4 by genus
+tse_genus <- agglomerateByRank(tse.temp,
+                               rank = "Species",
+                               onRankOnly = TRUE)
+
+# Takes subset: only samples from feces, skin, or tongue
+#tse_genus_subset <- tse_genus[ , colData(tse_genus)$sample_type %in% c("Feces", "Skin", "Tongue") ]
+tse_genus_subset<-tse_genus
+
+# Get n most abundant taxa, and subsets the data by them
+top_taxa <- getTopTaxa(tse_genus_subset, top = 30)
+tse_genus_subset <- tse_genus_subset[top_taxa, ]
+
+# Gets the assay table
+mat <- assay(tse_genus_subset)
+
+temp<-as_tibble(t(mat))
+temp$pre_allo_factor1<-colData(tse_genus_subset)$pre_allo_factor1
+
+t1<-temp %>%
+  dplyr::group_by(pre_allo_factor1) %>%
+  dplyr::summarise(dplyr::across(-starts_with("pre_allo_factor1"), mean, na.rm = TRUE))
+
+mat.grouped<-t(t1[,-1])
+mat.grouped<-mat.grouped %>% log1p() %>% compositions::scale(center=FALSE,scale=FALSE) %>%  as.data.frame()
+# Cluster Features / Taxa
+colnames(mat.grouped)<-t1$pre_allo_factor1
+
+# Hierarchical clustering
+taxa_hclust <- hclust(dist(mat), method = "complete")
+
+# Creates a phylogenetic tree
+taxa_tree <- ape::as.phylo(taxa_hclust)
+
+# Plot taxa tree
+taxa_tree <- ggtree(taxa_tree) + 
+  theme(plot.margin=margin(0,0,0,0)) # removes margins
+
+# Get order of taxa in plot
+taxa_ordered <- get_taxa_name(taxa_tree)
+
+# to view the tree, run
+# taxa_tree
+
+
+
+# Creates clusters (e.g. 3 clusters)
+taxa_clusters <- cutree(tree = taxa_hclust, k = 10)
+
+# Converts into data frame
+taxa_clusters <- data.frame(clusters = taxa_clusters)
+taxa_clusters$clusters <- factor(taxa_clusters$clusters)
+
+# Order data so that it's same as in phylo tree
+taxa_clusters <- taxa_clusters[taxa_ordered, , drop = FALSE] 
+
+# Prints taxa and their clusters
+taxa_clusters
+
+
+# Adds information to rowData
+rowData(tse_genus_subset)$clusters <- taxa_clusters[order(match(rownames(taxa_clusters), 
+                                                                rownames(tse_genus_subset))), ]
+
+
+# Get order of samples in plot
+samples_ordered <- c("high_COND","low_COND","low_7_14")
+
+# Converts into data frame
+sample_data <- data.frame(pre_allo_factor1 = samples_ordered)
+rownames(sample_data)<-sample_data$pre_allo_factor1
+
+# Order data based on 
+mat.grouped <- mat.grouped[,samples_ordered]
+
+
+# Determines the scaling of colorss
+# Scale colors
+breaks <- seq(-ceiling(max(abs(mat))), ceiling(max(abs(mat))), 
+              length.out = ifelse( max(abs(mat))>5, 2*ceiling(max(abs(mat))), 10 ) )
+colors <- colorRampPalette(c("darkblue", "blue", "white", "red", "darkred"))(length(breaks)-1)
+
+#ann_colours<-list(Timepoints=Timepoints.colours,Center = Center.colours)
+
+pheatmap(mat.grouped, 
+         #annotation_row = taxa_clusters, 
+         annotation_col = sample_data,
+         #breaks = breaks,
+         #color = colors,
+         scale="row",
+         cluster_cols = FALSE,
+         show_colnames=TRUE,
+         annotation_colors = list(pre_allo_factor1=colours.list.pre_allo_factor3)
+)
+
+```
+
+## Heatmap
+
+```{r pheatmap maaslin metaphlan pre_allo_factor1,eval=TRUE,fig.dim=c(14,9),out.width="100%"}
+
+#  Pheatmap
+
+tse.temp <- tse.subset[rownames(tse.subset)%in% sig_maaslin2$feature , ]
+
+tse.temp <- transformSamples(tse.temp, method = "clr", abund_values = "counts",pseudocount = 1)
+# Add z-transformation on features (taxa)
+tse.temp <- transformFeatures(tse.temp, abund_values = "clr", method = "z", name = "clr_z")
+
+# Get n most abundant taxa, and subsets the data by them
+top_taxa <- getTopTaxa(tse.temp, top = 19)
+tse.temp <- tse.temp[top_taxa, ]
+
+# Gets the assay table
+mat <- assay(tse.temp, "clr_z")
+rownames(mat)<-rowData(tse.temp)$Species
+
+
+# Cluster Features / Taxa
+
+
+# Hierarchical clustering
+taxa_hclust <- hclust(dist(mat), method = "complete")
+
+# Creates a phylogenetic tree
+taxa_tree <- ape::as.phylo(taxa_hclust)
+
+# Plot taxa tree
+taxa_tree <- ggtree(taxa_tree) + 
+  theme(plot.margin=margin(0,0,0,0)) # removes margins
+
+# Get order of taxa in plot
+taxa_ordered <- get_taxa_name(taxa_tree)
+
+# to view the tree, run
+# taxa_tree
+
+
+
+# Creates clusters (e.g. 3 clusters)
+taxa_clusters <- cutree(tree = taxa_hclust, k = 5)
+
+# Converts into data frame
+taxa_clusters <- data.frame(clusters = taxa_clusters)
+taxa_clusters$clusters <- factor(taxa_clusters$clusters)
+
+# Order data so that it's same as in phylo tree
+taxa_clusters <- taxa_clusters[taxa_ordered, , drop = FALSE] 
+
+# Prints taxa and their clusters
+taxa_clusters
+
+
+# Adds information to rowData
+rowData(tse.temp)$clusters <- taxa_clusters[order(match(rownames(taxa_clusters), 
+                                                                 rownames(tse.temp))), ]
+
+
+## Cluster Samples
+
+# Hierarchical clustering
+sample_hclust <- hclust(dist(t(mat)), method = "complete")
+
+# Creates a phylogenetic tree
+sample_tree <- as.phylo(sample_hclust)
+
+# Plot sample tree
+sample_tree <- ggtree(sample_tree) + layout_dendrogram() + 
+  theme(plot.margin=margin(0,0,0,0)) # removes margins
+
+# Get order of samples in plot
+samples_ordered <- rev(get_taxa_name(sample_tree))
+
+# to view the tree, run
+# sample_tree
+
+# Creates clusters
+sample_clusters <- factor(cutree(tree = sample_hclust, k = 8))
+
+# Converts into data frame
+sample_data <- data.frame(clusters = sample_clusters)
+
+# Order data so that it's same as in phylo tree
+sample_data <- sample_data[samples_ordered, , drop = FALSE] 
+
+# Order data based on 
+tse.temp <- tse.temp[ , rownames(sample_data)]
+
+# Add sample type data
+sample_data$pre_allo_factor1 <-colData(tse.temp)$pre_allo_factor1
+
+
+sample_data$clusters<-NULL
+
+
+# Determines the scaling of colorss
+# Scale colors
+breaks <- seq(-ceiling(max(abs(mat))), ceiling(max(abs(mat))), 
+              length.out = ifelse( max(abs(mat))>5, 2*ceiling(max(abs(mat))), 10 ) )
+colors <- colorRampPalette(c("darkblue", "blue", "white", "red", "darkred"))(length(breaks)-1)
+
+#ann_colours<-list(Timepoints=Timepoints.colours,Center = Center.colours)
+
+pheatmap(mat, 
+         #annotation_row = taxa_clusters, 
+        annotation_col = sample_data,
+        #annotation_colors = ann_colours,
+        #breaks = breaks,
+        #color = colors,
+        cluster_cols = TRUE,cluster_rows=FALSE,
+        show_colnames=FALSE)
+         
+```
+
+## Maaslin2: pre_allo_factor3
+
+```{r pre_allo_factor3}
+#subset TSE by colData
+tse.subset<-tse.metaphlan[,colData(tse.metaphlan)$pre_allo_factor3 %in% c("high_COND","high_7_14","low_COND","low_7_14")]
+
+#remove zOTUs with zero counts after subsetting
+tse.subset<-tse.subset[rowSums(assay(tse.subset, "counts")) > 0, ]
+
+
+# maaslin2
+
+# maaslin expects features as columns and samples as rows 
+# for both the asv/otu table as well as meta data 
+asv <- t(assay(tse.subset))
+meta_data <- data.frame(colData(tse.subset))
+# you can specifiy different GLMs/normalizations/transforms. We used similar
+# settings as in Nearing et al. (2021) here:
+fit_data_pre_allo_factor3 <- Maaslin2(
+  asv,
+  meta_data,
+  output = "maaslin2_pre_allo_factor3",
+  transform = "LOG",
+  cores = 50,
+  fixed_effects = "pre_allo_factor3",
+  random_effects = c("Patient"), # you can also fit MLM by specifying random effects
+  # specifying a ref is especially important if you have more than 2 levels
+  reference = "pre_allo_factor3,low_COND",  
+  normalization = "NONE",
+  standardize = FALSE,
+  min_prevalence = 0 # prev filterin already done
+)
+# which genera are identified as differentially abundant? (leave out "head" to
+# see all)
+
+```
+
+```{r pre_allo_factor3 kable,results="asis"}
+
+tax<-rowData(tse.subset)
+tax$feature<-rownames(tax)
+res<-left_join(data.frame(fit_data_pre_allo_factor3$results),tax,by="feature",copy=TRUE)
+
+kable(data.frame(filter(res, qval <= 0.15)),format = "html") %>% kable_styling(latex_options = "scale_down",font_size = 11) %>%kable_classic(full_width = F, html_font = "Cambria")
+
+```
+
+```{r maaslin2 sig features pre_allo_factor3,results=T,eval=TRUE,fig.dim=c(12,10),out.width="100%"}
+
+
+sig_maaslin2<-filter(res, qval <= 0.1)
+mat<-assay(tse.subset,"counts")
+mat.selected<-mat[row.names(mat) %in% sig_maaslin2$feature,]
+mat_mapping<-cbind(t(mat.selected),data.frame(colData(tse.subset)))%>% 
+  slice_head(n=30)
+test<-pivot_longer(mat_mapping,cols = starts_with("s__")) %>% 
+  mutate(pre_allo_factor3=factor(pre_allo_factor3,levels=c("high_COND","high_7_14","low_COND","low_7_14")))
+
+
+
+
+p<-ggplot(test,aes(name,log(value+1),fill=pre_allo_factor3))
+p+geom_boxplot(outlier.shape = NA) +
+  coord_flip()+
+  #facet_wrap(~name,scales="free")+
+  geom_jitter()+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  xlab("Group")+
+  ylab("Relative Abundance")
+
+```
+
+```{r pheatmap species pre_allo_factor3 maaslin_allSpecies,eval=TRUE,fig.dim=c(8,5),out.width="100%"}
+
+sig_maaslin2<-filter(res, qval <= 0.25)
+
+tse.temp <- tse.subset[rownames(tse.subset)%in% sig_maaslin2$feature ,colData(tse.subset)$pre_allo_factor3 %in% c("high_COND","high_7_14","low_COND","low_7_14")]
+
+tse.temp<-tse.temp[rowSums(assay(tse.temp, "counts")) > 0, ]
+
+
+# Agglomerate tse.V3V4 by genus
+tse_genus <- agglomerateByRank(tse.temp,
+                               rank = "Species",
+                               onRankOnly = TRUE)
+
+# Takes subset: only samples from feces, skin, or tongue
+#tse_genus_subset <- tse_genus[ , colData(tse_genus)$sample_type %in% c("Feces", "Skin", "Tongue") ]
+tse_genus_subset<-tse_genus
+
+# Get n most abundant taxa, and subsets the data by them
+top_taxa <- getTopTaxa(tse_genus_subset, top = 8)
+tse_genus_subset <- tse_genus_subset[top_taxa, ]
+
+# Gets the assay table
+mat <- assay(tse_genus_subset)
+
+temp<-as_tibble(t(mat))
+temp$pre_allo_factor3<-colData(tse_genus_subset)$pre_allo_factor3
+
+t1<-temp %>%
+  dplyr::group_by(pre_allo_factor3) %>%
+  dplyr::summarise(dplyr::across(-starts_with("pre_allo_factor3"), mean, na.rm = TRUE))
+
+mat.grouped<-t(t1[,-1])
+mat.grouped<-mat.grouped %>% log1p() %>% compositions::scale(center=FALSE,scale=FALSE) %>%  as.data.frame()
+# Cluster Features / Taxa
+colnames(mat.grouped)<-t1$pre_allo_factor3
+
+# Hierarchical clustering
+taxa_hclust <- hclust(dist(mat), method = "complete")
+
+# Creates a phylogenetic tree
+taxa_tree <- ape::as.phylo(taxa_hclust)
+
+# Plot taxa tree
+taxa_tree <- ggtree(taxa_tree) + 
+  theme(plot.margin=margin(0,0,0,0)) # removes margins
+
+# Get order of taxa in plot
+taxa_ordered <- get_taxa_name(taxa_tree)
+
+# to view the tree, run
+# taxa_tree
+
+
+
+# Creates clusters (e.g. 3 clusters)
+taxa_clusters <- cutree(tree = taxa_hclust, k = 7)
+
+# Converts into data frame
+taxa_clusters <- data.frame(clusters = taxa_clusters)
+taxa_clusters$clusters <- factor(taxa_clusters$clusters)
+
+# Order data so that it's same as in phylo tree
+taxa_clusters <- taxa_clusters[taxa_ordered, , drop = FALSE] 
+
+# Prints taxa and their clusters
+taxa_clusters
+
+
+# Adds information to rowData
+rowData(tse_genus_subset)$clusters <- taxa_clusters[order(match(rownames(taxa_clusters), 
+                                                                rownames(tse_genus_subset))), ]
+
+
+# Get order of samples in plot
+samples_ordered <- c("high_COND","high_7_14","low_COND","low_7_14")
+
+# Converts into data frame
+sample_data <- data.frame(pre_allo_factor3 = samples_ordered)
+rownames(sample_data)<-sample_data$pre_allo_factor3
+
+# Order data based on 
+mat.grouped <- mat.grouped[,samples_ordered]
+
+
+# Determines the scaling of colorss
+# Scale colors
+breaks <- seq(-ceiling(max(abs(mat))), ceiling(max(abs(mat))), 
+              length.out = ifelse( max(abs(mat))>5, 2*ceiling(max(abs(mat))), 10 ) )
+colors <- colorRampPalette(c("darkblue", "blue", "white", "red", "darkred"))(length(breaks)-1)
+
+#ann_colours<-list(Timepoints=Timepoints.colours,Center = Center.colours)
+
+pheatmap(mat.grouped, 
+         #annotation_row = taxa_clusters, 
+         annotation_col = sample_data,
+         #breaks = breaks,
+         #color = colors,
+         scale="row",
+         cluster_cols = FALSE,
+         show_colnames=TRUE,
+         annotation_colors = list(pre_allo_factor3=colours.list.pre_allo_factor3)
+)
+
+# Pathways Humann
+
+## Maaslin2: post_allo_index5_post
+
+```{r tse.humann_pathabundance ko post_allo_index5_post}
+#subset TSE by colData
+tse.subset<-tse.humann_pathabundance[,colData(tse.humann_pathabundance)$post_allo_index5_post %in% c("high_7_14","low_7_14")]
+
+#remove zOTUs with zero counts after subsetting
+tse.subset<-tse.subset[rowSums(assay(tse.subset, "counts")) > 0, ]
+
+
+# maaslin2
+
+# maaslin expects features as columns and samples as rows 
+# for both the asv/otu table as well as meta data 
+asv <- t(assay(tse.subset,"relabundance"))
+meta_data <- data.frame(colData(tse.subset))
+# you can specifiy different GLMs/normalizations/transforms. We used similar
+# settings as in Nearing et al. (2021) here:
+fit_data_tse.humann_pathabundance_post_allo_index5_post <- Maaslin2(
+  asv,
+  meta_data,
+  output = "maaslin2_tse.humann_pathabundance_post_allo_index5_post",
+  transform = "LOG",
+  cores = 50,
+  fixed_effects = "post_allo_index5_post",
+  #random_effects = c("Patient"), # you can also fit MLM by specifying random effects
+  # specifying a ref is especially important if you have more than 2 levels
+  reference = "post_allo_index5_post,high_7_14",  
+  normalization = "NONE",
+  standardize = FALSE,
+  min_prevalence = 0 # prev filterin already done
+)
+# which genera are identified as differentially abundant? (leave out "head" to
+# see all)
+
+```
+
+```{r tse.humann_pathabundance post_allo_index5_post kable,results="asis"}
+
+tax<-rowData(tse.subset)
+tax$feature<-rownames(tax)
+res<-left_join(data.frame(fit_data_tse.humann_pathabundance_post_allo_index5_post$results),tax,by="feature",copy=TRUE)
+
+kable(data.frame(filter(res, qval <= 0.25)),format = "html") %>% kable_styling(latex_options = "scale_down",font_size = 11) %>%kable_classic(full_width = F, html_font = "Cambria")
+
+```
+
+```{r tse.humann_pathabundance maaslin2 sig features post_allo_index5_post,results=T,eval=TRUE,fig.dim=c(10,10),out.width="100%"}
+
+
+sig_maaslin2<-filter(res, qval <= 0.25)
+mat<-assay(tse.subset,"relabundance")
+mat.selected<-data.frame(mat[rownames(mat) %in% sig_maaslin2$feature,])
+mat_mapping<-cbind(t(mat.selected),data.frame(colData(tse.subset)))%>% 
+  slice_head(n=30)
+test<-pivot_longer(mat_mapping,cols = starts_with(sig_maaslin2$feature))%>% 
+  mutate(post_allo_index5_post=factor(post_allo_index5_post,levels=c("high_7_14","low_7_14")))
+
+path_name<-rowData(tse.subset)
+path_name$name<-rownames(path_name)
+temp<-left_join(test,path_name,by="name",copy=TRUE)
+
+
+
+p<-ggplot(temp,aes(name,log(value.x+1),fill=post_allo_index5_post))
+p+geom_boxplot(outlier.shape = NA) +
+  coord_flip()+
+  #facet_wrap(~name,scales="free")+
+  geom_jitter()+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  xlab("Group")+
+  ylab("Relative Abundance")
+
+```
+
+```{r tse.humann_pathabundance maaslin2 sig features COEF post_allo_index5_post top30,results=T,eval=TRUE,fig.dim=c(8,8),out.width="100%"}
+res %>% 
+  filter(qval<0.25) %>%
+  filter(!is.na(path)) %>% 
+  filter(!value.y=="PWY_6936") %>% 
+  mutate(path = fct_reorder(path, coef)) %>% 
+  slice_head(n=30) %>% 
+  ggplot(aes(coef,path,fill=coef>0)) + 
+  geom_bar(stat="identity",position="dodge" )+
+  scale_fill_manual(values=colours.erik.gvhd)+
+  #scale_fill_manual(values=c("#ff2500"))+
+  xlab(label="Effect Size (Coef)")+
+  theme_classic()+
+  theme(legend.position="none",axis.title.y=element_blank())
+
+```
+
+
+
+```{r VolcanoPlot Index5 Maaslin2,fig.dim=c(4,4),out.width="100%"}
+
+abs_log <- function(x){
+  x[x==0] <- 1
+  si <- sign(x)
+  si * log2(si*x)
+}
+
+res$log2FC<-abs_log(exp(res$coef))
+
+de<-res %>% 
+    filter(!feature=="PWY_6936")
+
+
+# The significantly differentially expressed genes are the ones found in the upper-left and upper-right corners.
+# Add a column to the data frame to specify if they are UP- or DOWN- regulated (log2FoldChange respectively positive or negative)
+
+# add a column of NAs
+de$diffexpressed <- "NO"
+# if log2Foldchange > 0.6 and pvalue < 0.05, set as "UP" 
+de$diffexpressed[de$log2FC > 2 & de$qval < 0.25] <- "UP"
+# if log2Foldchange < -0.6 and pvalue < 0.05, set as "DOWN"
+de$diffexpressed[de$log2FC < -2 & de$qval < 0.25] <- "DOWN"
+
+
+
+
+top <- 30
+top_genes <- bind_rows(de %>% 
+    filter(diffexpressed == 'UP') %>% 
+    arrange(qval, desc(abs(log2FC))) %>% 
+    head(top),
+  de %>% 
+    filter(diffexpressed == 'DOWN') %>% 
+    arrange(qval, desc(abs(log2FC))) %>% 
+    head(top)
+)
+
+top_genes$delabel <- NA
+top_genes$delabel[top_genes$diffexpressed != "NO"] <- top_genes$feature[top_genes$diffexpressed != "NO"]
+
+
+
+# 2. to automate a bit: ceate a named vector: the values are the colors to be used, the names are the categories they will be assigned to:
+mycolors <- c("#0095ff", "#ff2500", "gray50")
+names(mycolors) <- c("DOWN", "UP", "NO")
+
+# Now write down the name of genes beside the points...
+# Create a new column "delabel" to de, that will contain the name of genes differentially expressed (NA in case they are not)
+de$delabel <- NA
+de$delabel[de$diffexpressed != "NO"] <- de$feature[de$diffexpressed != "NO"]
+
+
+library(ggrepel)
+# plot adding up all layers we have seen so far
+ggplot(data=de, aes(x=log2FC, y=-log10(qval), col=diffexpressed, label=delabel)) +
+  geom_point() + 
+  theme_classic() +
+  #geom_text_repel() +
+  scale_color_manual(values=mycolors) +
+  geom_vline(xintercept=c(-2.0, 2.0), col="black",linetype="dashed") +
+  geom_hline(yintercept=-log10(0.25), col="black",linetype="dashed")+
+  theme(legend.position = "none")+
+  #xlab(label="log2FoldChange")+
+  xlab(label=bquote(~Log[2]~ 'Fold Change'))+
+  ylab(label= bquote(~-Log[10]~italic(P[adj])))#+
+  #geom_label_repel(data = top_genes,
+  #                 mapping = aes(log2FC, -log(qval,10), label = delabel),
+  #                 size = 2)
+
+
+
+```
+
+
+
+## Heatmap
+
+```{r pheatmap maaslin tse.humann_pathabundance_post_allo_index5_post,eval=TRUE,fig.dim=c(14,9),out.width="100%"}
+
+#  Pheatmap
+
+sig_maaslin2<-filter(res, qval <= 0.25)
+
+tse.temp <- tse.subset[rownames(tse.subset)%in% sig_maaslin2$feature ,]
+
+tse.temp <- transformSamples(tse.temp, method = "clr", abund_values = "counts",pseudocount = 1)
+# Add z-transformation on features (taxa)
+tse.temp <- transformFeatures(tse.temp, abund_values = "clr", method = "z", name = "clr_z")
+
+# Get n most abundant taxa, and subsets the data by them
+top_taxa <- getTopTaxa(tse.temp, top = 7)
+tse.temp <- tse.temp[top_taxa, ]
+
+# Gets the assay table
+mat <- assay(tse.temp, "clr_z")
+rownames(mat)<-rowData(tse.temp)$path
+
+
+# Cluster Features / Taxa
+
+
+# Hierarchical clustering
+taxa_hclust <- hclust(dist(mat), method = "complete")
+
+# Creates a phylogenetic tree
+taxa_tree <- ape::as.phylo(taxa_hclust)
+
+# Plot taxa tree
+taxa_tree <- ggtree(taxa_tree) + 
+  theme(plot.margin=margin(0,0,0,0)) # removes margins
+
+# Get order of taxa in plot
+taxa_ordered <- get_taxa_name(taxa_tree)
+
+# to view the tree, run
+# taxa_tree
+
+
+
+# Creates clusters (e.g. 3 clusters)
+taxa_clusters <- cutree(tree = taxa_hclust, k = 5)
+
+# Converts into data frame
+taxa_clusters <- data.frame(clusters = taxa_clusters)
+taxa_clusters$clusters <- factor(taxa_clusters$clusters)
+
+# Order data so that it's same as in phylo tree
+taxa_clusters <- taxa_clusters[taxa_ordered, , drop = FALSE] 
+
+# Prints taxa and their clusters
+taxa_clusters
+
+
+# Adds information to rowData
+rowData(tse.temp)$clusters <- taxa_clusters[order(match(rownames(taxa_clusters), 
+                                                        rownames(tse.temp))), ]
+
+
+## Cluster Samples
+
+# Hierarchical clustering
+sample_hclust <- hclust(dist(t(mat)), method = "complete")
+
+# Creates a phylogenetic tree
+sample_tree <- as.phylo(sample_hclust)
+
+# Plot sample tree
+sample_tree <- ggtree(sample_tree) + layout_dendrogram() + 
+  theme(plot.margin=margin(0,0,0,0)) # removes margins
+
+# Get order of samples in plot
+samples_ordered <- rev(get_taxa_name(sample_tree))
+
+# to view the tree, run
+# sample_tree
+
+# Creates clusters
+sample_clusters <- factor(cutree(tree = sample_hclust, k = 8))
+
+# Converts into data frame
+sample_data <- data.frame(clusters = sample_clusters)
+
+# Order data so that it's same as in phylo tree
+sample_data <- sample_data[samples_ordered, , drop = FALSE] 
+
+# Order data based on 
+tse.temp <- tse.temp[ , rownames(sample_data)]
+
+# Add sample type data
+sample_data$post_allo_index5_post <-colData(tse.temp)$post_allo_index5_post
+
+
+sample_data$clusters<-NULL
+
+
+# Determines the scaling of colorss
+# Scale colors
+breaks <- seq(-ceiling(max(abs(mat))), ceiling(max(abs(mat))), 
+              length.out = ifelse( max(abs(mat))>5, 2*ceiling(max(abs(mat))), 10 ) )
+colors <- colorRampPalette(c("darkblue", "blue", "white", "red", "darkred"))(length(breaks)-1)
+
+#ann_colours<-list(Timepoints=Timepoints.colours,Center = Center.colours)
+
+pheatmap(mat, 
+         #annotation_row = taxa_clusters, 
+         annotation_col = sample_data,
+         #annotation_colors = ann_colours,
+         #breaks = breaks,
+         #color = colors,
+         cluster_cols = TRUE,cluster_rows=FALSE,
+         show_colnames=FALSE)
+
+```
+
+## Maaslin2: pre_allo_factor1
+
+```{r tse.humann_pathabundance ko pre_allo_factor1}
+#subset TSE by colData
+tse.subset<-tse.humann_pathabundance[,colData(tse.humann_pathabundance)$pre_allo_factor1 %in% c("high_COND","low_COND","low_7_14")]
+
+#remove zOTUs with zero counts after subsetting
+tse.subset<-tse.subset[rowSums(assay(tse.subset, "counts")) > 0, ]
+
+
+# maaslin2
+
+# maaslin expects features as columns and samples as rows 
+# for both the asv/otu table as well as meta data 
+asv <- t(assay(tse.subset,"relabundance"))
+meta_data <- data.frame(colData(tse.subset))
+# you can specifiy different GLMs/normalizations/transforms. We used similar
+# settings as in Nearing et al. (2021) here:
+fit_data_tse.humann_pathabundance_pre_allo_factor1 <- Maaslin2(
+  asv,
+  meta_data,
+  output = "maaslin2_tse.humann_pathabundance_pre_allo_factor1",
+  transform = "LOG",
+  cores = 50,
+  fixed_effects = "pre_allo_factor1",
+  #random_effects = c("Patient"), # you can also fit MLM by specifying random effects
+  # specifying a ref is especially important if you have more than 2 levels
+  reference = "pre_allo_factor1,high_COND",  
+  normalization = "NONE",
+  standardize = FALSE,
+  min_prevalence = 0 # prev filterin already done
+)
+# which genera are identified as differentially abundant? (leave out "head" to
+# see all)
+
+```
+
+```{r tse.humann_pathabundance pre_allo_factor1 kable,results="asis"}
+
+tax<-rowData(tse.subset)
+tax$feature<-rownames(tax)
+res<-left_join(data.frame(fit_data_tse.humann_pathabundance_pre_allo_factor1$results),tax,by="feature",copy=TRUE)
+
+kable(data.frame(filter(res, qval <= 0.25)),format = "html") %>% kable_styling(latex_options = "scale_down",font_size = 11) %>%kable_classic(full_width = F, html_font = "Cambria")
+
+```
+
+```{r tse.humann_pathabundance maaslin2 sig features pre_allo_factor1,results=T,eval=TRUE,fig.dim=c(10,10),out.width="100%"}
+
+
+sig_maaslin2<-filter(res, qval <= 0.1)
+mat<-assay(tse.subset,"relabundance")
+mat.selected<-mat[row.names(mat) %in% sig_maaslin2$feature,]
+mat_mapping<-cbind(t(mat.selected),data.frame(colData(tse.subset)))%>% 
+  slice_head(n=30)
+test<-pivot_longer(mat_mapping,cols = starts_with(sig_maaslin2$feature)) %>% 
+  mutate(pre_allo_factor1=factor(pre_allo_factor1,levels=c("high_COND","low_COND","low_7_14")))
+
+path_name<-rowData(tse.subset)
+path_name$name<-rownames(path_name)
+test<-left_join(test,path_name,by="name",copy=TRUE)
+
+
+
+p<-ggplot(test,aes(path,log(value.x+1),fill=pre_allo_factor1))
+p+geom_boxplot(outlier.shape = NA) +
+  coord_flip()+
+  #facet_wrap(~name,scales="free")+
+  geom_jitter()+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  xlab("Group")+
+  ylab("Relative Abundance")
+
+```
+
+```{r tse.humann_pathabundance maaslin2 sig COEF features pre_allo_factor1,results=T,eval=TRUE,fig.dim=c(15,10),out.width="100%"}
+
+res %>% 
+  filter(qval<0.1) %>%
+  mutate(path = fct_reorder(path, coef)) %>% 
+  ggplot(aes(coef,path,fill=value.x)) + 
+  geom_bar(stat="identity",position="dodge" )+
+  xlab(label="Effect Size (Coef)")+
+  theme_classic()+
+  theme(legend.position="none",axis.title.y=element_blank())
+
+
+```
+
+## Heatmap
+
+```{r pheatmap maaslin tse.humann_pathabundance_pre_allo_factor1,eval=TRUE,fig.dim=c(14,9),out.width="100%"}
+
+#  Pheatmap
+
+sig_maaslin2<-filter(res, qval <= 0.25)
+
+tse.temp <- tse.subset[rownames(tse.subset)%in% sig_maaslin2$feature ,]
+
+tse.temp <- transformSamples(tse.temp, method = "clr", abund_values = "counts",pseudocount = 1)
+# Add z-transformation on features (taxa)
+tse.temp <- transformFeatures(tse.temp, abund_values = "clr", method = "z", name = "clr_z")
+
+# Get n most abundant taxa, and subsets the data by them
+top_taxa <- getTopTaxa(tse.temp, top = 40)
+tse.temp <- tse.temp[top_taxa, ]
+
+# Gets the assay table
+mat <- assay(tse.temp, "clr_z")
+rownames(mat)<-rowData(tse.temp)$path
+
+
+# Cluster Features / Taxa
+
+
+# Hierarchical clustering
+taxa_hclust <- hclust(dist(mat), method = "complete")
+
+# Creates a phylogenetic tree
+taxa_tree <- ape::as.phylo(taxa_hclust)
+
+# Plot taxa tree
+taxa_tree <- ggtree(taxa_tree) + 
+  theme(plot.margin=margin(0,0,0,0)) # removes margins
+
+# Get order of taxa in plot
+taxa_ordered <- get_taxa_name(taxa_tree)
+
+# to view the tree, run
+# taxa_tree
+
+
+
+# Creates clusters (e.g. 3 clusters)
+taxa_clusters <- cutree(tree = taxa_hclust, k = 5)
+
+# Converts into data frame
+taxa_clusters <- data.frame(clusters = taxa_clusters)
+taxa_clusters$clusters <- factor(taxa_clusters$clusters)
+
+# Order data so that it's same as in phylo tree
+taxa_clusters <- taxa_clusters[taxa_ordered, , drop = FALSE] 
+
+# Prints taxa and their clusters
+taxa_clusters
+
+
+# Adds information to rowData
+rowData(tse.temp)$clusters <- taxa_clusters[order(match(rownames(taxa_clusters), 
+                                                        rownames(tse.temp))), ]
+
+
+## Cluster Samples
+
+# Hierarchical clustering
+sample_hclust <- hclust(dist(t(mat)), method = "complete")
+
+# Creates a phylogenetic tree
+sample_tree <- as.phylo(sample_hclust)
+
+# Plot sample tree
+sample_tree <- ggtree(sample_tree) + layout_dendrogram() + 
+  theme(plot.margin=margin(0,0,0,0)) # removes margins
+
+# Get order of samples in plot
+samples_ordered <- rev(get_taxa_name(sample_tree))
+
+# to view the tree, run
+# sample_tree
+
+# Creates clusters
+sample_clusters <- factor(cutree(tree = sample_hclust, k = 8))
+
+# Converts into data frame
+sample_data <- data.frame(clusters = sample_clusters)
+
+# Order data so that it's same as in phylo tree
+sample_data <- sample_data[samples_ordered, , drop = FALSE] 
+
+# Order data based on 
+tse.temp <- tse.temp[ , rownames(sample_data)]
+
+# Add sample type data
+sample_data$pre_allo_factor1 <-colData(tse.temp)$pre_allo_factor1
+
+
+sample_data$clusters<-NULL
+
+
+# Determines the scaling of colorss
+# Scale colors
+breaks <- seq(-ceiling(max(abs(mat))), ceiling(max(abs(mat))), 
+              length.out = ifelse( max(abs(mat))>5, 2*ceiling(max(abs(mat))), 10 ) )
+colors <- colorRampPalette(c("darkblue", "blue", "white", "red", "darkred"))(length(breaks)-1)
+
+#ann_colours<-list(Timepoints=Timepoints.colours,Center = Center.colours)
+
+pheatmap(mat, 
+         #annotation_row = taxa_clusters, 
+         annotation_col = sample_data,
+         #annotation_colors = ann_colours,
+         #breaks = breaks,
+         #color = colors,
+         cluster_cols = TRUE,cluster_rows=FALSE,
+         show_colnames=FALSE)
+
+```
+
+## Maaslin2: pre_allo_factor3
+
+```{r tse.humann_pathabundance ko pre_allo_factor3}
+#subset TSE by colData
+tse.subset<-tse.humann_pathabundance[,colData(tse.humann_pathabundance)$pre_allo_factor3 %in% c("high_COND","low_COND","high_7_14","low_7_14")]
+
+#remove zOTUs with zero counts after subsetting
+tse.subset<-tse.subset[rowSums(assay(tse.subset, "counts")) > 0, ]
+
+
+# maaslin2
+
+# maaslin expects features as columns and samples as rows 
+# for both the asv/otu table as well as meta data 
+asv <- t(assay(tse.subset,"relabundance"))
+meta_data <- data.frame(colData(tse.subset))
+# you can specifiy different GLMs/normalizations/transforms. We used similar
+# settings as in Nearing et al. (2021) here:
+fit_data_tse.humann_pathabundance_pre_allo_factor3 <- Maaslin2(
+  asv,
+  meta_data,
+  output = "maaslin2_tse.humann_pathabundance_pre_allo_factor3",
+  transform = "LOG",
+  cores = 50,
+  fixed_effects = "pre_allo_factor3",
+  #random_effects = c("Patient"), # you can also fit MLM by specifying random effects
+  # specifying a ref is especially important if you have more than 2 levels
+  reference = "pre_allo_factor3,low_COND",  
+  normalization = "NONE",
+  standardize = FALSE,
+  min_prevalence = 0 # prev filterin already done
+)
+# which genera are identified as differentially abundant? (leave out "head" to
+# see all)
+
+```
+
+```{r tse.humann_pathabundance pre_allo_factor3 kable,results="asis"}
+
+tax<-rowData(tse.subset)
+tax$feature<-rownames(tax)
+res<-left_join(data.frame(fit_data_tse.humann_pathabundance_pre_allo_factor3$results),tax,by="feature",copy=TRUE)
+
+kable(data.frame(filter(res, qval <= 0.25)),format = "html") %>% kable_styling(latex_options = "scale_down",font_size = 11) %>%kable_classic(full_width = F, html_font = "Cambria")
+
+```
+
+```{r tse.humann_pathabundance maaslin2 sig features pre_allo_factor3,results=T,eval=TRUE,fig.dim=c(10,10),out.width="100%"}
+
+
+sig_maaslin2<-filter(res, qval <= 0.25)
+mat<-assay(tse.subset,"relabundance")
+mat.selected<-mat[row.names(mat) %in% sig_maaslin2$feature,]
+mat_mapping<-cbind(t(mat.selected),data.frame(colData(tse.subset)))%>% 
+  slice_head(n=20)
+test<-pivot_longer(mat_mapping,cols = starts_with(sig_maaslin2$feature)) %>% 
+    mutate(pre_allo_factor3=factor(pre_allo_factor3,levels=c("high_COND","low_COND","high_7_14","low_7_14")))
+
+path_name<-rowData(tse.subset)
+path_name$name<-rownames(path_name)
+test<-left_join(test,path_name,by="name",copy=TRUE)
+
+
+
+p<-ggplot(test,aes(path,log(value.x+1),fill=pre_allo_factor3))
+p+geom_boxplot(outlier.shape = NA) +
+  coord_flip()+
+  #facet_wrap(~name,scales="free")+
+  geom_jitter()+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  xlab("Group")+
+  ylab("Relative Abundance")
+
+```
+
+```{r tse.humann_pathabundance maaslin2 sig features COEF pre_allo_factor3,results=T,eval=TRUE,fig.dim=c(15,10),out.width="100%"}
+
+res %>% 
+  filter(qval<0.25) %>%
+  mutate(path = fct_reorder(path, coef)) %>% 
+  ggplot(aes(coef,path,fill=value.x)) + 
+  geom_bar(stat="identity",position="dodge" )+
+   xlab(label="Effect Size (Coef)")+
+  theme_classic()+
+  theme(legend.position="none",axis.title.y=element_blank())
+
+
+```
+
+
+## Maaslin2: pre_allo_factor3
+
+```{r tse.humann_pathabundance ko pre_allo_factor3 7_14}
+#subset TSE by colData
+tse.subset<-tse.humann_pathabundance[,colData(tse.humann_pathabundance)$pre_allo_factor3 %in% c("high_7_14","low_7_14")]
+
+#remove zOTUs with zero counts after subsetting
+tse.subset<-tse.subset[rowSums(assay(tse.subset, "counts")) > 0, ]
+
+
+# maaslin2
+
+# maaslin expects features as columns and samples as rows 
+# for both the asv/otu table as well as meta data 
+asv <- t(assay(tse.subset,"relabundance"))
+meta_data <- data.frame(colData(tse.subset))
+# you can specifiy different GLMs/normalizations/transforms. We used similar
+# settings as in Nearing et al. (2021) here:
+fit_data_tse.humann_pathabundance_pre_allo_factor3_7_14 <- Maaslin2(
+  asv,
+  meta_data,
+  output = "maaslin2_tse.humann_pathabundance_pre_allo_factor3_7_14",
+  transform = "LOG",
+  cores = 50,
+  fixed_effects = "pre_allo_factor3",
+  #random_effects = c("Patient"), # you can also fit MLM by specifying random effects
+  # specifying a ref is especially important if you have more than 2 levels
+  reference = "pre_allo_factor3,low_COND",  
+  normalization = "NONE",
+  standardize = FALSE,
+  min_prevalence = 0 # prev filterin already done
+)
+# which genera are identified as differentially abundant? (leave out "head" to
+# see all)
+
+```
+
+```{r tse.humann_pathabundance pre_allo_factor3 kable 7_14,results="asis"}
+
+tax<-rowData(tse.subset)
+tax$feature<-rownames(tax)
+res<-left_join(data.frame(fit_data_tse.humann_pathabundance_pre_allo_factor3_7_14$results),tax,by="feature",copy=TRUE)
+
+kable(data.frame(filter(res, qval <= 0.25)),format = "html") %>% kable_styling(latex_options = "scale_down",font_size = 11) %>%kable_classic(full_width = F, html_font = "Cambria")
+
+```
+
+```{r tse.humann_pathabundance maaslin2 sig features pre_allo_factor3 7_14,results=T,eval=TRUE,fig.dim=c(10,10),out.width="100%"}
+
+
+sig_maaslin2<-filter(res, qval <= 0.25)
+mat<-assay(tse.subset,"relabundance")
+mat.selected<-mat[row.names(mat) %in% sig_maaslin2$feature,]
+mat_mapping<-cbind(t(mat.selected),data.frame(colData(tse.subset)))%>% 
+  slice_head(n=30)
+
+test<-pivot_longer(mat_mapping,cols = starts_with(sig_maaslin2$feature)) %>% 
+  mutate(pre_allo_factor3=factor(pre_allo_factor3,levels=c("high_7_14","low_7_14")))
+
+path_name<-rowData(tse.subset)
+path_name$name<-rownames(path_name)
+test<-left_join(test,path_name,by="name",copy=TRUE)
+
+p<-ggplot(test,aes(path,log(value.x+1),fill=pre_allo_factor3))
+p+geom_boxplot(outlier.shape = NA) +
+  coord_flip()+
+  #facet_wrap(~name,scales="free")+
+  geom_jitter()+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  xlab("Group")+
+  ylab("Relative Abundance")
+
+```
+
+```{r tse.humann_pathabundance maaslin2 sig features COEF pre_allo_factor3 7_14,results=T,eval=TRUE,fig.dim=c(15,10),out.width="100%"}
+
+res %>% 
+  filter(qval<0.25) %>%
+  mutate(path = fct_reorder(path, coef)) %>% 
+  ggplot(aes(coef,path,fill=value.x)) + 
+  geom_bar(stat="identity",position="dodge" )+
+   xlab(label="Effect Size (Coef)")+
+  theme_classic()+
+  theme(legend.position="none",axis.title.y=element_blank())
+
+
+```
+
+## Heatmap
+
+```{r pheatmap maaslin tse.humann_pathabundance_pre_allo_factor3 7_14,eval=TRUE,fig.dim=c(14,9),out.width="100%"}
+
+#  Pheatmap
+
+sig_maaslin2<-filter(res, qval <= 0.25)
+
+tse.temp <- tse.subset[rownames(tse.subset)%in% sig_maaslin2$feature ,]
+
+tse.temp <- transformSamples(tse.temp, method = "clr", abund_values = "counts",pseudocount = 1)
+# Add z-transformation on features (taxa)
+tse.temp <- transformFeatures(tse.temp, abund_values = "clr", method = "z", name = "clr_z")
+
+# Get n most abundant taxa, and subsets the data by them
+top_taxa <- getTopTaxa(tse.temp, top = 10)
+tse.temp <- tse.temp[top_taxa, ]
+
+# Gets the assay table
+mat <- assay(tse.temp, "clr_z")
+rownames(mat)<-rowData(tse.temp)$path
+
+
+# Cluster Features / Taxa
+
+
+# Hierarchical clustering
+taxa_hclust <- hclust(dist(mat), method = "complete")
+
+# Creates a phylogenetic tree
+taxa_tree <- ape::as.phylo(taxa_hclust)
+
+# Plot taxa tree
+taxa_tree <- ggtree(taxa_tree) + 
+  theme(plot.margin=margin(0,0,0,0)) # removes margins
+
+# Get order of taxa in plot
+taxa_ordered <- get_taxa_name(taxa_tree)
+
+# to view the tree, run
+# taxa_tree
+
+
+
+# Creates clusters (e.g. 3 clusters)
+taxa_clusters <- cutree(tree = taxa_hclust, k = 5)
+
+# Converts into data frame
+taxa_clusters <- data.frame(clusters = taxa_clusters)
+taxa_clusters$clusters <- factor(taxa_clusters$clusters)
+
+# Order data so that it's same as in phylo tree
+taxa_clusters <- taxa_clusters[taxa_ordered, , drop = FALSE] 
+
+# Prints taxa and their clusters
+taxa_clusters
+
+
+# Adds information to rowData
+rowData(tse.temp)$clusters <- taxa_clusters[order(match(rownames(taxa_clusters), 
+                                                        rownames(tse.temp))), ]
+
+
+## Cluster Samples
+
+# Hierarchical clustering
+sample_hclust <- hclust(dist(t(mat)), method = "complete")
+
+# Creates a phylogenetic tree
+sample_tree <- as.phylo(sample_hclust)
+
+# Plot sample tree
+sample_tree <- ggtree(sample_tree) + layout_dendrogram() + 
+  theme(plot.margin=margin(0,0,0,0)) # removes margins
+
+# Get order of samples in plot
+samples_ordered <- rev(get_taxa_name(sample_tree))
+
+# to view the tree, run
+# sample_tree
+
+# Creates clusters
+sample_clusters <- factor(cutree(tree = sample_hclust, k = 8))
+
+# Converts into data frame
+sample_data <- data.frame(clusters = sample_clusters)
+
+# Order data so that it's same as in phylo tree
+sample_data <- sample_data[samples_ordered, , drop = FALSE] 
+
+# Order data based on 
+tse.temp <- tse.temp[ , rownames(sample_data)]
+
+# Add sample type data
+sample_data$pre_allo_factor3 <-colData(tse.temp)$pre_allo_factor3
+
+
+sample_data$clusters<-NULL
+
+
+# Determines the scaling of colorss
+# Scale colors
+breaks <- seq(-ceiling(max(abs(mat))), ceiling(max(abs(mat))), 
+              length.out = ifelse( max(abs(mat))>5, 2*ceiling(max(abs(mat))), 10 ) )
+colors <- colorRampPalette(c("darkblue", "blue", "white", "red", "darkred"))(length(breaks)-1)
+
+#ann_colours<-list(Timepoints=Timepoints.colours,Center = Center.colours)
+
+pheatmap(mat, 
+         #annotation_row = taxa_clusters, 
+         annotation_col = sample_data,
+         #annotation_colors = ann_colours,
+         #breaks = breaks,
+         #color = colors,
+         cluster_cols = TRUE,cluster_rows=FALSE,
+         show_colnames=FALSE)
+
+```
+
+# Agglomerated to MetaCyc Superclasses
+
+## Superclass 2
+
+```{r tse.humann_pathabundance ko post_allo_index5_post aggSuperclass2}
+#subset TSE by colData
+tse.subset<-tse.humann_pathabundance[,colData(tse.humann_pathabundance)$post_allo_index5_post %in% c("high_7_14","low_7_14")]
+
+
+#remove zOTUs with zero counts after subsetting
+tse.subset<-tse.subset[rowSums(assay(tse.subset, "counts")) > 0, ]
+
+
+tse.subset<-aggSE(tse.subset,"Genus")
+
+
+# maaslin2
+
+# maaslin expects features as columns and samples as rows 
+# for both the asv/otu table as well as meta data 
+asv <- t(assay(tse.subset,"relabundance"))
+meta_data <- data.frame(colData(tse.subset))
+# you can specifiy different GLMs/normalizations/transforms. We used similar
+# settings as in Nearing et al. (2021) here:
+fit_data_tse.humann_pathabundance_post_allo_index5_post_superclass2 <- Maaslin2(
+  asv,
+  meta_data,
+  output = "maaslin2_tse.humann_pathabundance_post_allo_index5_post_Superclass2",
+  transform = "LOG",
+  fixed_effects = "post_allo_index5_post",
+  #random_effects = c("Patient"), # you can also fit MLM by specifying random effects
+  # specifying a ref is especially important if you have more than 2 levels
+  reference = "post_allo_index5_post,high_7_14",  
+  normalization = "NONE",
+  standardize = FALSE,
+  min_prevalence = 0 # prev filterin already done
+)
+# which genera are identified as differentially abundant? (leave out "head" to
+# see all)
+
+```
+
+```{r tse.humann_pathabundance post_allo_index5_post aggSuperclass2 kable,results="asis"}
+
+tax<-rowData(tse.subset)
+tax$feature<-rownames(tax)
+res<-left_join(data.frame(fit_data_tse.humann_pathabundance_post_allo_index5_post_superclass2$results),tax,by="feature",copy=TRUE)
+
+kable(data.frame(filter(res, qval <= 0.25)),format = "html") %>% kable_styling(latex_options = "scale_down",font_size = 11) %>%kable_classic(full_width = F, html_font = "Cambria")
+
+```
+
+```{r tse.humann_pathabundance maaslin2 sig features post_allo_index5_post aggSuperclass2,results=T,eval=FALSE,fig.dim=c(11,12),out.width="100%"}
+
+
+sig_maaslin2<-filter(res, qval <= 0.25)
+mat<-assay(tse.subset,"relabundance")
+mat.selected<-mat[row.names(mat) %in% sig_maaslin2$feature,]
+mat_mapping<-cbind(t(mat.selected),data.frame(colData(tse.subset)))
+test<-pivot_longer(mat_mapping,cols = starts_with("SSM"))
+
+
+
+
+p<-ggplot(test,aes(post_allo_index5_post,value,fill=post_allo_index5_post))
+p+geom_boxplot(outlier.shape = NA) +
+  facet_wrap(~name,scales="free")+
+  geom_jitter()+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  xlab("Group")+
+  ylab("Relative Abundance")
+
+```
+
+```{r tse.humann_pathabundance maaslin2 sig features COEF post_allo_index5_post aggSuperclass2,results=T,eval=FALSE,fig.dim=c(15,10),out.width="100%"}
+
+res %>% 
+  filter(qval<0.25) %>%
+  mutate(path = fct_reorder(path, coef)) %>% 
+  ggplot(aes(coef,path,fill=value)) + 
+  geom_bar(stat="identity",position="dodge" )+
+   xlab(label="Effect Size (Coef)")+
+  theme_classic()+
+  theme(legend.position="none",axis.title.y=element_blank())
+
+
+```
+
+## Heatmap
+
+```{r pheatmap maaslin tse.humann_pathabundance_post_allo_index5_post aggSuperclass2,eval=FALSE,fig.dim=c(14,9),out.width="100%"}
+
+#  Pheatmap
+
+tse.temp <- tse.subset[rownames(tse.subset)%in% sig_maaslin2$feature ,]
+
+tse.temp <- transformSamples(tse.temp, method = "clr", abund_values = "counts",pseudocount = 1)
+# Add z-transformation on features (taxa)
+tse.temp <- transformFeatures(tse.temp, abund_values = "clr", method = "z", name = "clr_z")
+
+# Get n most abundant taxa, and subsets the data by them
+#top_taxa <- getTopTaxa(tse.temp, top = 4)
+#tse.temp <- tse.temp[top_taxa, ]
+
+# Gets the assay table
+mat <- assay(tse.temp, "clr_z")
+rownames(mat)<-rowData(tse.temp)$path
+
+
+# Cluster Features / Taxa
+
+
+# Hierarchical clustering
+taxa_hclust <- hclust(dist(mat), method = "complete")
+
+# Creates a phylogenetic tree
+taxa_tree <- ape::as.phylo(taxa_hclust)
+
+# Plot taxa tree
+taxa_tree <- ggtree(taxa_tree) + 
+  theme(plot.margin=margin(0,0,0,0)) # removes margins
+
+# Get order of taxa in plot
+taxa_ordered <- get_taxa_name(taxa_tree)
+
+# to view the tree, run
+# taxa_tree
+
+
+
+# Creates clusters (e.g. 3 clusters)
+taxa_clusters <- cutree(tree = taxa_hclust, k = 2)
+
+# Converts into data frame
+taxa_clusters <- data.frame(clusters = taxa_clusters)
+taxa_clusters$clusters <- factor(taxa_clusters$clusters)
+
+# Order data so that it's same as in phylo tree
+taxa_clusters <- taxa_clusters[taxa_ordered, , drop = FALSE] 
+
+# Prints taxa and their clusters
+taxa_clusters
+
+
+# Adds information to rowData
+rowData(tse.temp)$clusters <- taxa_clusters[order(match(rownames(taxa_clusters), 
+                                                        rownames(tse.temp))), ]
+
+
+## Cluster Samples
+
+# Hierarchical clustering
+sample_hclust <- hclust(dist(t(mat)), method = "complete")
+
+# Creates a phylogenetic tree
+sample_tree <- as.phylo(sample_hclust)
+
+# Plot sample tree
+sample_tree <- ggtree(sample_tree) + layout_dendrogram() + 
+  theme(plot.margin=margin(0,0,0,0)) # removes margins
+
+# Get order of samples in plot
+samples_ordered <- rev(get_taxa_name(sample_tree))
+
+# to view the tree, run
+# sample_tree
+
+# Creates clusters
+sample_clusters <- factor(cutree(tree = sample_hclust, k = 8))
+
+# Converts into data frame
+sample_data <- data.frame(clusters = sample_clusters)
+
+# Order data so that it's same as in phylo tree
+sample_data <- sample_data[samples_ordered, , drop = FALSE] 
+
+# Order data based on 
+tse.temp <- tse.temp[ , rownames(sample_data)]
+
+# Add sample type data
+sample_data$post_allo_index5_post <-colData(tse.temp)$post_allo_index5_post
+
+
+sample_data$clusters<-NULL
+
+
+# Determines the scaling of colorss
+# Scale colors
+breaks <- seq(-ceiling(max(abs(mat))), ceiling(max(abs(mat))), 
+              length.out = ifelse( max(abs(mat))>5, 2*ceiling(max(abs(mat))), 10 ) )
+colors <- colorRampPalette(c("darkblue", "blue", "white", "red", "darkred"))(length(breaks)-1)
+
+#ann_colours<-list(Timepoints=Timepoints.colours,Center = Center.colours)
+
+pheatmap(mat, 
+         #annotation_row = taxa_clusters, 
+         annotation_col = sample_data,
+         #annotation_colors = ann_colours,
+         #breaks = breaks,
+         #color = colors,
+         cluster_cols = TRUE,
+         show_colnames=FALSE)
+
+```
+
+## Superclass 1
+
+```{r tse.humann_pathabundance ko post_allo_index5_post aggsuperclass1}
+#subset TSE by colData
+tse.subset<-tse.humann_pathabundance[,colData(tse.humann_pathabundance)$post_allo_index5_post %in% c("high_7_14","low_7_14")]
+
+
+#remove zOTUs with zero counts after subsetting
+tse.subset<-tse.subset[rowSums(assay(tse.subset, "counts")) > 0, ]
+
+
+tse.subset<-aggSE(tse.subset,"Family")
+
+
+# maaslin2
+
+# maaslin expects features as columns and samples as rows 
+# for both the asv/otu table as well as meta data 
+asv <- t(assay(tse.subset,"relabundance"))
+meta_data <- data.frame(colData(tse.subset))
+# you can specifiy different GLMs/normalizations/transforms. We used similar
+# settings as in Nearing et al. (2021) here:
+fit_data_tse.humann_pathabundance_post_allo_index5_post_superclass1 <- Maaslin2(
+  asv,
+  meta_data,
+  output = "maaslin2_tse.humann_pathabundance_post_allo_index5_post_superclass1",
+  transform = "LOG",
+  fixed_effects = "post_allo_index5_post",
+  #random_effects = c("Patient"), # you can also fit MLM by specifying random effects
+  # specifying a ref is especially important if you have more than 2 levels
+  reference = "post_allo_index5_post,high_7_14",  
+  normalization = "NONE",
+  standardize = FALSE,
+  min_prevalence = 0 # prev filterin already done
+)
+# which genera are identified as differentially abundant? (leave out "head" to
+# see all)
+
+```
+
+```{r tse.humann_pathabundance post_allo_index5_post aggsuperclass1 kable,results="asis"}
+
+tax<-rowData(tse.subset)
+tax$feature<-rownames(tax)
+res<-left_join(data.frame(fit_data_tse.humann_pathabundance_post_allo_index5_post_superclass1$results),tax,by="feature",copy=TRUE)
+
+kable(data.frame(filter(res, qval <= 0.25)),format = "html") %>% kable_styling(latex_options = "scale_down",font_size = 11) %>%kable_classic(full_width = F, html_font = "Cambria")
+
+```
+
+```{r tse.humann_pathabundance maaslin2 sig features post_allo_index5_post aggsuperclass1,results=T,eval=FALSE,fig.dim=c(11,10),out.width="100%"}
+
+
+sig_maaslin2<-filter(res, qval <= 0.25)
+mat<-assay(tse.subset,"relabundance")
+mat.selected<-mat[row.names(mat) %in% sig_maaslin2$feature,]
+mat_mapping<-cbind(t(mat.selected),data.frame(colData(tse.subset)))
+test<-pivot_longer(mat_mapping,cols = starts_with("SSM"))
+
+
+
+
+p<-ggplot(test,aes(post_allo_index5_post,value,fill=post_allo_index5_post))
+p+geom_boxplot(outlier.shape = NA) +
+  facet_wrap(~name,scales="free")+
+  geom_jitter()+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  xlab("Group")+
+  ylab("Relative Abundance")
+
+```
+
+```{r tse.humann_pathabundance maaslin2 sig features COEF post_allo_index5_post aggsuperclass1,results=T,eval=FALSE,fig.dim=c(15,10),out.width="100%"}
+
+res %>% 
+  filter(qval<0.25) %>%
+  mutate(path = fct_reorder(path, coef)) %>% 
+  ggplot(aes(coef,path,fill=value)) + 
+  geom_bar(stat="identity",position="dodge" )+
+   xlab(label="Effect Size (Coef)")+
+  theme_classic()+
+  theme(legend.position="none",axis.title.y=element_blank())
+
+
+```
+
+```{r pheatmap maaslin tse.humann_pathabundance_post_allo_index5_post aggsuperclass1,eval=FALSE,fig.dim=c(14,9),out.width="100%"}
+
+#  Pheatmap
+
+tse.temp <- tse.subset[rownames(tse.subset)%in% sig_maaslin2$feature ,]
+
+tse.temp <- transformSamples(tse.temp, method = "clr", abund_values = "counts",pseudocount = 1)
+# Add z-transformation on features (taxa)
+tse.temp <- transformFeatures(tse.temp, abund_values = "clr", method = "z", name = "clr_z")
+
+# Get n most abundant taxa, and subsets the data by them
+top_taxa <- getTopTaxa(tse.temp, top = 15)
+tse.temp <- tse.temp[top_taxa, ]
+
+# Gets the assay table
+mat <- assay(tse.temp, "clr_z")
+rownames(mat)<-rowData(tse.temp)$path
+
+
+# Cluster Features / Taxa
+
+
+# Hierarchical clustering
+taxa_hclust <- hclust(dist(mat), method = "complete")
+
+# Creates a phylogenetic tree
+taxa_tree <- ape::as.phylo(taxa_hclust)
+
+# Plot taxa tree
+taxa_tree <- ggtree(taxa_tree) + 
+  theme(plot.margin=margin(0,0,0,0)) # removes margins
+
+# Get order of taxa in plot
+taxa_ordered <- get_taxa_name(taxa_tree)
+
+# to view the tree, run
+# taxa_tree
+
+
+
+# Creates clusters (e.g. 3 clusters)
+taxa_clusters <- cutree(tree = taxa_hclust, k = 5)
+
+# Converts into data frame
+taxa_clusters <- data.frame(clusters = taxa_clusters)
+taxa_clusters$clusters <- factor(taxa_clusters$clusters)
+
+# Order data so that it's same as in phylo tree
+taxa_clusters <- taxa_clusters[taxa_ordered, , drop = FALSE] 
+
+# Prints taxa and their clusters
+taxa_clusters
+
+
+# Adds information to rowData
+rowData(tse.temp)$clusters <- taxa_clusters[order(match(rownames(taxa_clusters), 
+                                                        rownames(tse.temp))), ]
+
+
+## Cluster Samples
+
+# Hierarchical clustering
+sample_hclust <- hclust(dist(t(mat)), method = "complete")
+
+# Creates a phylogenetic tree
+sample_tree <- as.phylo(sample_hclust)
+
+# Plot sample tree
+sample_tree <- ggtree(sample_tree) + layout_dendrogram() + 
+  theme(plot.margin=margin(0,0,0,0)) # removes margins
+
+# Get order of samples in plot
+samples_ordered <- rev(get_taxa_name(sample_tree))
+
+# to view the tree, run
+# sample_tree
+
+# Creates clusters
+sample_clusters <- factor(cutree(tree = sample_hclust, k = 8))
+
+# Converts into data frame
+sample_data <- data.frame(clusters = sample_clusters)
+
+# Order data so that it's same as in phylo tree
+sample_data <- sample_data[samples_ordered, , drop = FALSE] 
+
+# Order data based on 
+tse.temp <- tse.temp[ , rownames(sample_data)]
+
+# Add sample type data
+sample_data$post_allo_index5_post <-colData(tse.temp)$post_allo_index5_post
+
+
+sample_data$clusters<-NULL
+
+
+# Determines the scaling of colorss
+# Scale colors
+breaks <- seq(-ceiling(max(abs(mat))), ceiling(max(abs(mat))), 
+              length.out = ifelse( max(abs(mat))>5, 2*ceiling(max(abs(mat))), 10 ) )
+colors <- colorRampPalette(c("darkblue", "blue", "white", "red", "darkred"))(length(breaks)-1)
+
+#ann_colours<-list(Timepoints=Timepoints.colours,Center = Center.colours)
+
+pheatmap(mat, 
+         #annotation_row = taxa_clusters, 
+         annotation_col = sample_data,
+         #annotation_colors = ann_colours,
+         #breaks = breaks,
+         #color = colors,
+         cluster_cols = TRUE,
+         show_colnames=FALSE)
+
+```
+
+# Selected Biochemical Pathways
+
+## post_allo_index5_post
+
+```{r selected pathways and reactions, echo=TRUE}
+
+lactate_pathways <- c("P124_PWY","P122_PWY","P461_PWY","ANAEROFRUCAT_PWY")
+
+butanoate_pathways <- c("PWY_5022","PWY_5676","P162_PWY","GLUDEG_II_PWY","PWY_8190","P163_PWY","CENTFERM_PWY","PWY_5677")
+
+propanoate_pathways <- c("PWY_8086","PWY_7013","PWY_8188","PWY_5088","PWY_8377","PROPFERM_PWY")
+
+acetate_pathways <- c("PWY0_1312","PWY_5535","PWY_8328","PWY_5536","P161_PWY","P124_PWY","PWY_804","P461_PWY","P162_PWY","P163_PWY","PROPFERM_PWY")
+
+bile_acid_degradation <-c("PWY_8134","PWY_7754","PWY_8135","PWY_8255","PWY_8254","PWY_8256","PWY_6518")
+
+starch_degradation<-c("PWY_6731")
+
+phloretate_DAT_pathways<-c("PWY_8016")
+
+tryptophan_pathways <- c("PWY_3162","PWY_3181","PWY_5081","PWY_5651","PWY_5655","PWY_6307","PWY_6309","PWY_6505","TRPCAT_PWY","TRPIAACAT_PWY","TRPKYNCAT_PWY","TRYPDEG_PWY","TRYPTOPHAN_DEGRADATION_1")
+
+
+butyrate_kinase_ko<-c("K00929")
+
+fermentation_pathways <-c("ANAEROFRUCAT_PWY","CENTFERM_PWY","FERMENTATION_PWY","P108_PWY","P122_PWY","PWY_5676","PWY_5677", "PWY_6588","PWY_6590","PWY_7111","PWY_7383","PWY_7385","PWY_7396","PWY4LZ_257")
+
+BCoAT_pathway<-c("PWY_5676")
+
+butyrate_kinase_pathway<-c("CENTFERM_PWY")
+
+vitb12_syn<-c("COBALSYN_PWY")
+
+b_vitamins<-c("BIOTIN_BIOSYNTHESIS_PWY","COBALSYN_PWY","FOLSYN_PWY","PANTO_PWY","PANTOSYN_PWY","PWY_3841","PWY_5005","PWY_6168","PWY_6612","PWY_6895","PWY_6897","PWY_7204","PWY_7356","PWY_7357","PWY0_845","PYRIDOXSYN_PWY","RIBOSYN2_PWY","THISYNARA_PWY")
+
+nucleotide_nucleoside_degradation<-c("PWY_8130","PWY_8131","PWY_5659","PWY_6019","PWY_7179","PWY_7179_1","P164_PWY","PWY_5497","PWY_5044","PWY_6353","PWY0_1296","PWY0_1295","PWY_7209","PWY_6430","PWY_6556","PWY_7195","PWY0_1298","PWY0_1297","PWY_7181","PWY_7206","PWY_5532","PWY_7654","PWY_7656","PWY_7653","PWY0_1391","PWY_4361","PWY_7174","PWY_8132")
+
+amino_acid_biosynthesis<-c("ARGININE_SYN4_PWY","ARGSYN_PWY","ARGSYNBSUB_PWY","ASPASN_PWY","BRANCHED_CHAIN_AA_SYN_PWY","CITRULBIO_PWY","COMPLETE_ARO_PWY","DAPLYSINESYN_PWY","GLUTORN_PWY","HISTSYN_PWY","HOMOSER_METSYN_PWY","HSERMETANA_PWY","ILEUSYN_PWY","METSYN_PWY","P4_PWY","PWY_181","PWY_2941","PWY_2942","PWY_3001","PWY_5004","PWY_5097","PWY_5103","PWY_5104","PWY_5154","PWY_5345","PWY_5347","PWY_5505","PWY_6292","PWY_6293","PWY_6549","PWY_6628","PWY_6630","PWY_6922","PWY_6936","PWY_702", "PWY_724","PWY_7400","PWY_821","PWY0_1061","SER_GLYSYN_PWY","THRESYN_PWY","VALSYN_PWY") 
+```
+
+```{r selected pathways and reactions post_allo_index5_post individual_plots,fig.dim=c(3,4),out.width="100%"}
+
+
+d1<-rowSums(t(assay(tse.humann_pathabundance,"relabundance")[which(rownames(tse.humann_pathabundance) %in% lactate_pathways),]))
+d2<-rowSums(t(assay(tse.humann_pathabundance,"relabundance")[which(rownames(tse.humann_pathabundance) %in% butanoate_pathways),]))
+d3<-colSums(t(assay(tse.humann_pathabundance,"relabundance")[which(rownames(tse.humann_pathabundance) %in% propanoate_pathways),]))
+d4<-rowSums(t(assay(tse.humann_pathabundance,"relabundance")[which(rownames(tse.humann_pathabundance) %in% acetate_pathways),]))
+
+d5<-rowSums(t(assay(tse.humann_pathabundance,"relabundance")[which(rownames(tse.humann_pathabundance) %in% bile_acid_degradation),]))
+d6<-colSums(t(assay(tse.humann_pathabundance,"relabundance")[which(rownames(tse.humann_pathabundance) %in% starch_degradation),]))
+
+d7<-rowSums(t(assay(tse.humann_pathabundance,"relabundance")[which(rownames(tse.humann_pathabundance) %in% phloretate_DAT_pathways),]))
+d8<-colSums(t(assay(tse.humann_pathabundance,"relabundance")[which(rownames(tse.humann_pathabundance) %in% tryptophan_pathways),]))
+
+d9<-colSums(t(assay(tse.humann_ko,"counts")[which(rownames(tse.humann_ko) %in% butyrate_kinase_ko),]))
+
+d10<-rowSums(t(assay(tse.humann_pathabundance,"relabundance")[which(rownames(tse.humann_pathabundance) %in% fermentation_pathways),]))
+
+d11<-colSums(t(assay(tse.humann_pathabundance,"relabundance")[which(rownames(tse.humann_pathabundance) %in% BCoAT_pathway),]))
+
+d12<-colSums(t(assay(tse.humann_pathabundance,"relabundance")[which(rownames(tse.humann_pathabundance) %in% butyrate_kinase_pathway),]))
+
+d13 <- rowSums(t(assay(tse.humann_pathabundance,"relabundance")[which(rownames(tse.humann_pathabundance) %in% c(butanoate_pathways,propanoate_pathways,acetate_pathways)),]))
+
+d14<-colSums(t(assay(tse.humann_pathabundance,"relabundance")[which(rownames(tse.humann_pathabundance) %in% vitb12_syn),]))
+
+d15<-rowSums(t(assay(tse.humann_pathabundance,"relabundance")[which(rownames(tse.humann_pathabundance) %in% b_vitamins),]))
+
+d16<-rowSums(t(assay(tse.humann_pathabundance,"relabundance")[which(rownames(tse.humann_pathabundance) %in% nucleotide_nucleoside_degradation),]))
+
+d17<-rowSums(t(assay(tse.humann_pathabundance,"relabundance")[which(rownames(tse.humann_pathabundance) %in% amino_acid_biosynthesis),]))
+
+
+selected_pathways_df<-data.frame(Lactate=d1, Butyrate=d2, Propionate=d3,Acetate=d4, Starch_degradation=d6, Fermentation=d10, BCoAT_pw=d11,SCFA=d13, B_Vitamins=d15, Nucleotide_Degradation=d16, Amino_Acid_Biosynthesis=d17,bile_acid_degradation=d5, tryptophan_pw=d8)
+
+selected_pathways_metadata<-cbind(selected_pathways_df,colData(tse.humann_pathabundance))
+
+df<-pivot_longer(selected_pathways_metadata,cols = colnames(selected_pathways_df))
+
+
+stat.test1<-df %>% 
+  filter(post_allo_index5_post %in% c("high_7_14","low_7_14")) %>% 
+  group_by(name) %>% 
+  t_test(value ~ post_allo_index5_post,paired = F)%>%
+  adjust_pvalue(method = "BH") %>%
+  add_significance("p.adj")
+
+stat.test1<-stat.test1 %>%
+ add_xy_position(x = "post_allo_index5_post", fun = "mean_se", step.increase = 0)
+#https://github.com/kassambara/rstatix/issues/24
+
+
+
+
+plot<-df %>% 
+  filter(post_allo_index5_post %in% c("high_7_14","low_7_14")) %>% 
+  ggplot(aes(post_allo_index5_post,value,colour=post_allo_index5_post))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  facet_wrap_paginate(~name,scales="free",ncol=1,nrow=1)+
+  ylab("Relative Abundance")+
+  #stat_pvalue_manual(stat.test1, label = "p.adj.signif",y.position = "y.position")+   
+  stat_compare_means(p.adjust.method = "BH",label = "p.signif",label.x = 1.5)+
+  theme_classic()+
+  theme(axis.text.x=element_blank(),legend.position = "none",axis.title.x = element_blank())+
+  scale_color_manual(values=colours.post_allo_index5_post)+
+  scale_y_continuous(expand = expansion(mult = .2))
+
+required_n_pages <- n_pages(plot)
+
+
+for(i in 1:required_n_pages){
+
+plot<-df %>% 
+  filter(post_allo_index5_post %in% c("high_7_14","low_7_14")) %>% 
+  ggplot(aes(post_allo_index5_post,value,colour=post_allo_index5_post))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  facet_wrap_paginate(~name,scales="free",ncol=1,nrow=1,page = i)+
+  ylab("Relative Abundance")+
+  #stat_pvalue_manual(stat.test1, label = "p.adj.signif",y.position = "y.position")+   
+  stat_compare_means(p.adjust.method = "BH",label = "p.signif",label.x = 1.5)+
+  theme_classic()+
+  theme(axis.text.x=element_blank(),legend.position = "none",axis.title.x = element_blank())+
+  scale_color_manual(values=colours.post_allo_index5_post)+
+  scale_y_continuous(expand = expansion(mult = .2))
+
+print(plot)
+
+}
+
+
+```
+
+```{r stats post,results="asis"}
+
+
+kable(data.frame(stat.test1,format = "html")) %>% kable_styling(latex_options = "scale_down",font_size = 13) %>%kable_classic(full_width = F, html_font = "Cambria")
+
+```
+
+## pre_allo_factor1
+
+```{r selected pathways and reactions pre_allo_factor1,fig.dim=c(13,9),out.width="100%"}
+
+stat.test1<-df %>% 
+  filter(pre_allo_factor1 %in% c("high_COND","low_COND","low_7_14")) %>% 
+  mutate(pre_allo_factor1=factor(pre_allo_factor1,levels=c("high_COND","low_COND","low_7_14"))) %>% 
+  group_by(name) %>% 
+  t_test(value ~ pre_allo_factor1,paired = F)%>%
+  adjust_pvalue(method = "BH") %>%
+  add_significance("p.adj")
+
+stat.test1<-stat.test1 %>%
+  add_xy_position(x="pre_allo_factor1")
+#https://github.com/kassambara/rstatix/issues/24
+
+
+df %>% 
+  filter(pre_allo_factor1 %in% c("high_COND","low_COND","low_7_14")) %>% 
+  mutate(pre_allo_factor1=factor(pre_allo_factor1,levels=c("high_COND","low_COND","low_7_14"))) %>% 
+  ggplot(aes(pre_allo_factor1,value,colour=pre_allo_factor1))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  facet_wrap(~name,scales="free")+
+  stat_pvalue_manual(stat.test1, label = "p.adj.signif",y.position = "y.position")+   
+  theme_classic()+
+  ylab("Relative Abundance")+
+  theme(axis.text.x=element_blank())
+
+```
+
+# Stratified Pathways
+
+-   butanoate_pathways (Butyrate)
+
+```{r selected_pathways_stratified_butanoate_pathways,fig.dim=c(4,3),out.width="50%"}
+
+temp<-tse.humann_pathabundance_stratified[rowData(tse.humann_pathabundance_stratified)$path %in% butanoate_pathways,colData(tse.humann_pathabundance_stratified)$post_allo_index5_post %in% c("high_7_14","low_7_14")]
+
+molten_tse_butyrate <- meltAssay(temp,
+                        add_row_data = TRUE,
+                        add_col_data = TRUE,
+                        abund_values = "relabundance")
+
+molten_tse_butyrate$pw_melt <- rep("butanoate",times=nrow(molten_tse_butyrate))
+
+
+molten_tse_butyrate %>% 
+  ggplot(aes(post_allo_index5_post,relabundance,fill=Species))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  guides(fill = guide_legend(keywidth = 0.4,
+                              keyheight = 0.4,
+                              order = 3, 
+                              ncol=1))
+
+```
+
+- BCoAT_pathway (Butyrate)
+
+```{r selected_pathways_stratified_BCoAT_pathway,fig.dim=c(4,3),out.width="50%"}
+
+temp<-tse.humann_pathabundance_stratified[rowData(tse.humann_pathabundance_stratified)$path %in% BCoAT_pathway,colData(tse.humann_pathabundance_stratified)$post_allo_index5_post %in% c("high_7_14","low_7_14")]
+
+molten_tse_BCoAT <- meltAssay(temp,
+                        add_row_data = TRUE,
+                        add_col_data = TRUE,
+                        abund_values = "relabundance")
+
+molten_tse_BCoAT$pw_melt <- rep("BCoAT",times=nrow(molten_tse_BCoAT))
+
+
+molten_tse_BCoAT %>% 
+  ggplot(aes(post_allo_index5_post,relabundance,fill=Species))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  guides(fill = guide_legend(keywidth = 0.4,
+                              keyheight = 0.4,
+                              order = 3, 
+                              ncol=1))
+
+```
+
+
+
+
+
+- BUK_pathway (Butyrate)
+
+```{r selected_pathways_stratified_Butyrate_kinase_pathway,fig.dim=c(4,3),out.width="50%"}
+
+temp<-tse.humann_pathabundance_stratified[rowData(tse.humann_pathabundance_stratified)$path =="CENTFERM_PWY",colData(tse.humann_pathabundance_stratified)$post_allo_index5_post %in% c("high_7_14","low_7_14")]
+
+molten_tse_buk <- meltAssay(temp,
+                        add_row_data = TRUE,
+                        add_col_data = TRUE,
+                        abund_values = "relabundance")
+
+molten_tse_buk$pw_melt <- rep("Butyrate_Kinase",times=nrow(molten_tse_buk))
+
+
+molten_tse_buk %>% 
+  ggplot(aes(post_allo_index5_post,relabundance,fill=Species))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  guides(fill = guide_legend(keywidth = 0.4,
+                              keyheight = 0.4,
+                              order = 3, 
+                              ncol=1))
+
+```
+
+
+```{r selected_pathways_stratified_Butyrate_kinase_kegg,fig.dim=c(4,3),out.width="50%"}
+
+temp<-tse.humann_genefamilies_ko_stratified[rowData(tse.humann_genefamilies_ko_stratified)$path %in% butyrate_kinase_ko,colData(tse.humann_genefamilies_ko_stratified)$post_allo_index5_post %in% c("high_7_14","low_7_14")]
+
+molten_tse_buk <- meltAssay(temp,
+                            add_row_data = TRUE,
+                            add_col_data = TRUE,
+                            abund_values = "relabundance")
+
+molten_tse_buk$pw_melt <- rep("Butyrate_Kinase",times=nrow(molten_tse_buk))
+
+
+molten_tse_buk %>% 
+  ggplot(aes(post_allo_index5_post,relabundance,fill=Species))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  ylab("Relative Abundance")+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  guides(fill = guide_legend(keywidth = 0.4,
+                             keyheight = 0.4,
+                             order = 3, 
+                             ncol=1))
+
+```
+
+- BCOAT Gene (KEGG)
+
+```{r selected_pathways_stratified_BCoAT_kegg,fig.dim=c(4,3),out.width="50%"}
+
+bcoat_ko<-c("K01035")
+
+temp<-tse.humann_genefamilies_ko_stratified[rowData(tse.humann_genefamilies_ko_stratified)$path %in% bcoat_ko,colData(tse.humann_genefamilies_ko_stratified)$post_allo_index5_post %in% c("high_7_14","low_7_14")]
+
+molten_tse_bcoat <- meltAssay(temp,
+                            add_row_data = TRUE,
+                            add_col_data = TRUE,
+                            abund_values = "relabundance")
+
+molten_tse_bcoat$pw_melt <- rep("BCoAT",times=nrow(molten_tse_bcoat))
+
+
+molten_tse_bcoat %>% 
+  ggplot(aes(post_allo_index5_post,relabundance,fill=Species))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  ylab("Relative Abundance")+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  guides(fill = guide_legend(keywidth = 0.4,
+                             keyheight = 0.4,
+                             order = 3, 
+                             ncol=1))
+
+```
+
+
+
+-   propanoate_pathways (Propionate)
+
+```{r selected_pathways_stratified_propanoate_pathways,fig.dim=c(4,4),out.width="50%"}
+
+temp<-tse.humann_pathabundance_stratified[rowData(tse.humann_pathabundance_stratified)$path %in% propanoate_pathways,colData(tse.humann_pathabundance_stratified)$post_allo_index5_post %in% c("high_7_14","low_7_14")]
+
+molten_tse_propionate <- meltAssay(temp,
+                        add_row_data = TRUE,
+                        add_col_data = TRUE,
+                        abund_values = "relabundance")
+
+molten_tse_propionate$pw_melt <- rep("propanoate",times=nrow(molten_tse_propionate))
+
+
+molten_tse_propionate %>% 
+  ggplot(aes(post_allo_index5_post,relabundance,fill=Species))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  guides(fill = guide_legend(keywidth = 0.4,
+                              keyheight = 0.4,
+                              order = 3, 
+                              ncol=1))
+
+```
+
+-   acetate_pathways (Acetate)
+
+```{r selected_pathways_stratified_acetate_pathways,fig.dim=c(5,4),out.width="50%"}
+
+temp<-tse.humann_pathabundance_stratified[rowData(tse.humann_pathabundance_stratified)$path %in% acetate_pathways,colData(tse.humann_pathabundance_stratified)$post_allo_index5_post %in% c("high_7_14","low_7_14")]
+
+molten_tse_acetate <- meltAssay(temp,
+                        add_row_data = TRUE,
+                        add_col_data = TRUE,
+                        abund_values = "relabundance")
+
+molten_tse_acetate$pw_melt <- rep("acetate",times=nrow(molten_tse_acetate))
+
+
+molten_tse_acetate %>% 
+  ggplot(aes(post_allo_index5_post,relabundance,fill=Species))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  guides(fill = guide_legend(keywidth = 0.4,
+                              keyheight = 0.4,
+                              order = 3, 
+                              ncol=1))
+
+```
+
+-   B Vitamins
+
+```{r selected_pathways_stratified_b_vitamins,fig.dim=c(13,7),out.width="50%"}
+
+temp<-tse.humann_pathabundance_stratified[rowData(tse.humann_pathabundance_stratified)$path %in% b_vitamins,colData(tse.humann_pathabundance_stratified)$post_allo_index5_post %in% c("high_7_14","low_7_14")]
+
+molten_tse_vitB <- meltAssay(temp,
+                        add_row_data = TRUE,
+                        add_col_data = TRUE,
+                        abund_values = "relabundance")
+
+molten_tse_vitB$pw_melt <- rep("B_vitamins",times=nrow(molten_tse_vitB))
+
+
+molten_tse_vitB %>% 
+  ggplot(aes(post_allo_index5_post,relabundance,fill=Species))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  guides(fill = guide_legend(keywidth = 0.4,
+                              keyheight = 0.4,
+                              order = 3, 
+                              ncol=3))
+
+```
+
+-   Starch Degradation
+
+```{r selected_pathways_stratified_starch_degradation,fig.dim=c(5,3),out.width="50%"}
+
+temp<-tse.humann_pathabundance_stratified[rowData(tse.humann_pathabundance_stratified)$path %in% starch_degradation,colData(tse.humann_pathabundance_stratified)$post_allo_index5_post %in% c("high_7_14","low_7_14")]
+
+molten_tse_starch <- meltAssay(temp,
+                        add_row_data = TRUE,
+                        add_col_data = TRUE,
+                        abund_values = "relabundance")
+
+molten_tse_starch$pw_melt <- rep("starch_degradation",times=nrow(molten_tse_starch))
+
+
+molten_tse_starch %>% 
+  ggplot(aes(post_allo_index5_post,relabundance,fill=Species))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  guides(fill = guide_legend(keywidth = 0.4,
+                              keyheight = 0.4,
+                              order = 3, 
+                              ncol=1))
+
+```
+
+-   Fermentation
+
+```{r selected_pathways_stratified_fermentation_pathways,fig.dim=c(10,8),out.width="50%"}
+
+temp<-tse.humann_pathabundance_stratified[rowData(tse.humann_pathabundance_stratified)$path %in% fermentation_pathways,colData(tse.humann_pathabundance_stratified)$post_allo_index5_post %in% c("high_7_14","low_7_14")]
+
+molten_tse_fermentation <- meltAssay(temp,
+                        add_row_data = TRUE,
+                        add_col_data = TRUE,
+                        abund_values = "relabundance")
+
+molten_tse_fermentation$pw_melt <- rep("fermentation",times=nrow(molten_tse_fermentation))
+
+
+
+molten_tse_fermentation %>% 
+  ggplot(aes(post_allo_index5_post,relabundance,fill=Species))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  guides(fill = guide_legend(keywidth = 0.4,
+                              keyheight = 0.4,
+                              order = 3, 
+                              ncol=2))
+
+```
+
+-   Nucleotide Degradation
+
+```{r selected_pathways_stratified_nucleotide_nucleoside_degradation,fig.dim=c(10,7),out.width="50%"}
+
+temp<-tse.humann_pathabundance_stratified[rowData(tse.humann_pathabundance_stratified)$path %in% nucleotide_nucleoside_degradation,colData(tse.humann_pathabundance_stratified)$post_allo_index5_post %in% c("high_7_14","low_7_14")]
+
+molten_tse_nucleotide <- meltAssay(temp,
+                        add_row_data = TRUE,
+                        add_col_data = TRUE,
+                        abund_values = "relabundance")
+
+molten_tse_nucleotide$pw_melt <- rep("nucleotide_degradation",times=nrow(molten_tse_nucleotide))
+
+
+molten_tse_nucleotide %>% 
+  ggplot(aes(post_allo_index5_post,relabundance,fill=Species))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  guides(fill=guide_legend(keywidth = 0.4,
+                              keyheight = 0.4,
+                              order = 3, 
+                              ncol=2))
+
+```
+
+-   Amino Acid Biosynthesis
+
+```{r selected_pathways_stratified_amino_acid_biosynthesis,fig.dim=c(13,9),out.width="50%"}
+
+temp<-tse.humann_pathabundance_stratified[rowData(tse.humann_pathabundance_stratified)$path %in% amino_acid_biosynthesis,colData(tse.humann_pathabundance_stratified)$post_allo_index5_post %in% c("high_7_14","low_7_14")]
+
+molten_tse_aa <- meltAssay(temp,
+                        add_row_data = TRUE,
+                        add_col_data = TRUE,
+                        abund_values = "relabundance")
+
+molten_tse_aa$pw_melt <- rep("amino_acid_biosynthesis",times=nrow(molten_tse_aa))
+
+molten_tse_aa %>% 
+  ggplot(aes(post_allo_index5_post,relabundance,fill=Species))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  guides(fill = guide_legend(keywidth = 0.4,
+                              keyheight = 0.4,
+                              order = 3, 
+                              ncol=3))
+
+```
+
+-   SCFA
+
+```{r selected_pathways_stratified_scfa,fig.dim=c(5,4),out.width="50%"}
+
+temp<-tse.humann_pathabundance_stratified[rowData(tse.humann_pathabundance_stratified)$path %in% c(butanoate_pathways,propanoate_pathways,acetate_pathways),colData(tse.humann_pathabundance_stratified)$post_allo_index5_post %in% c("high_7_14","low_7_14")]
+
+molten_tse_scfa <- meltAssay(temp,
+                        add_row_data = TRUE,
+                        add_col_data = TRUE,
+                        abund_values = "relabundance")
+
+molten_tse_scfa$pw_melt <- rep("scfa",times=nrow(molten_tse_scfa))
+
+molten_tse_scfa %>% 
+  ggplot(aes(post_allo_index5_post,relabundance,fill=Species))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  guides(fill = guide_legend(keywidth = 0.4,
+                              keyheight = 0.4,
+                              order = 3, 
+                              ncol=1))
+
+```
+
+```{r selected_pathways_stratified_all,fig.dim=c(14,21),out.width="100%"}
+
+
+molten_all_pw<-rbind(molten_tse_aa,molten_tse_acetate,molten_tse_butyrate,molten_tse_fermentation,molten_tse_nucleotide,molten_tse_propionate,molten_tse_scfa,molten_tse_starch,molten_tse_vitB)
+
+colourCount = length(unique(molten_all_pw$Species))
+
+molten_all_pw %>% 
+  ggplot(aes(post_allo_index5_post,relabundance,fill=Species))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  facet_wrap(~pw_melt,scales="free")+
+  scale_fill_manual(values = colorRampPalette(palette9)(colourCount))+
+  theme(axis.title.x = element_blank(), axis.text.x=element_text(angle=60,hjust=1,size=7),legend.position = "bottom",panel.spacing = unit(1, "cm", data = NULL))+
+  guides(fill = guide_legend(keywidth = 0.4,
+                              keyheight = 0.4,
+                              order = 3, 
+                              ncol=4))
+
+
+```
+
+```{r selected_pathways_stratified_all_top_taxa,fig.dim=c(13,12),out.width="100%"}
+
+colourCount = length(unique(molten_all_pw$Species))
+
+top20_taxa<-molten_all_pw %>% group_by(Species) %>%  summarize(temp=mean(relabundance)) %>% slice_max(n=30,order_by = temp)
+
+Species_renamed<-lapply(molten_all_pw$Species,
+                         function(x){if (x %in% top20_taxa$Species) {x} else {"Other"}})
+
+molten_all_pw$Species_renamed <- as.character(Species_renamed)
+
+top10_taxa$Species
+
+molten_all_pw %>% 
+  ggplot(aes(post_allo_index5_post,relabundance,fill=Species_renamed))+
+  geom_bar(stat="identity")+
+  theme_classic()+
+  facet_wrap(~pw_melt,scales="free")+
+  scale_fill_manual(values = colorRampPalette(palette9)(colourCount))+
+  theme(axis.title.x = element_blank(),axis.text.x=element_text(angle=60,hjust=1,size=7),legend.position = "right",panel.spacing = unit(1, "cm", data = NULL))+
+  guides(fill = guide_legend(keywidth = 0.4,
+                              keyheight = 0.4,
+                              order = 3, 
+                              ncol=1))
+
+
+```
+
+
+
+# All superclasses
+
+## superclass1
+
+```{r loop superclass1_all,fig.dim=c(4,4),out.width="70%"}
+
+tse.subset<-mia::agglomerateByRank(tse.humann_pathabundance,"Genus")
+
+tse.subset<-tse.subset[,colData(tse.subset)$post_allo_index5_post%in% c("high_7_14","low_7_14")]
+
+mat<-t(assay(tse.subset,"relabundance"))
+metadata<-colData(tse.subset)
+df<-data.frame(cbind(mat,metadata)) %>% 
+  pivot_longer(cols = -all_of(colnames(metadata)))
+
+
+stat.test1<-df %>% 
+  group_by(name) %>% 
+  t_test(value ~ post_allo_index5_post,paired = F)%>%
+  adjust_pvalue(method = "BH") %>%
+  add_significance("p.adj")
+
+stat.test1<-stat.test1 %>%
+ add_xy_position(x = "post_allo_index5_post", fun = "mean_se", step.increase = 0)
+#https://github.com/kassambara/rstatix/issues/24
+
+
+
+
+plot<-df %>% 
+  filter(post_allo_index5_post %in% c("high_7_14","low_7_14")) %>% 
+  ggplot(aes(post_allo_index5_post,value,colour=post_allo_index5_post))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  facet_wrap_paginate(~name,scales="free",ncol=1,nrow=1)
+
+
+required_n_pages <- n_pages(plot)
+
+
+for(i in 1:required_n_pages){
+
+plot<-df %>% 
+  filter(post_allo_index5_post %in% c("high_7_14","low_7_14")) %>% 
+  ggplot(aes(post_allo_index5_post,value,colour=post_allo_index5_post))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  facet_wrap_paginate(~name,scales="free",ncol=1,nrow=1,page = i)+
+  ylab("Relative Abundance")+
+  #stat_pvalue_manual(stat.test1, label = "p.adj.signif",y.position = "y.position")+   
+  stat_compare_means(p.adjust.method = "BH",label = "p.signif",label.x = 1.5)+
+  theme_classic()+
+  theme(axis.text.x=element_blank(),legend.position = "none",axis.title.x = element_blank())+
+  scale_color_manual(values=colours.post_allo_index5_post)+
+  scale_y_continuous(expand = expansion(mult = .2))
+
+print(plot)
+
+}
+
+```
+
+
+
+
+
+
+## superclass2
+
+```{r loop superclass2_all,fig.dim=c(4,4),out.width="70%"}
+
+tse.subset<-mia::agglomerateByRank(tse.humann_pathabundance,"Family")
+
+tse.subset<-tse.subset[,colData(tse.subset)$post_allo_index5_post%in% c("high_7_14","low_7_14")]
+
+mat<-t(assay(tse.subset,"relabundance"))
+metadata<-colData(tse.subset)
+df<-data.frame(cbind(mat,metadata)) %>% 
+  pivot_longer(cols = -all_of(colnames(metadata)))
+
+
+stat.test1<-df %>% 
+  group_by(name) %>% 
+  t_test(value ~ post_allo_index5_post,paired = F)%>%
+  adjust_pvalue(method = "BH") %>%
+  add_significance("p.adj")
+
+stat.test1<-stat.test1 %>%
+ add_xy_position(x = "post_allo_index5_post", fun = "mean_se", step.increase = 0)
+#https://github.com/kassambara/rstatix/issues/24
+
+plot<-df %>% 
+  filter(post_allo_index5_post %in% c("high_7_14","low_7_14")) %>% 
+  ggplot(aes(post_allo_index5_post,value,colour=post_allo_index5_post))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  facet_wrap_paginate(~name,scales="free",ncol=1,nrow=1)
+
+required_n_pages <- n_pages(plot)
+
+
+for(i in 1:required_n_pages){
+
+plot<-df %>% 
+  filter(post_allo_index5_post %in% c("high_7_14","low_7_14")) %>% 
+  ggplot(aes(post_allo_index5_post,value,colour=post_allo_index5_post))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  facet_wrap_paginate(~name,scales="free",ncol=1,nrow=1,page = i)+
+  ylab("Relative Abundance")+
+  #stat_pvalue_manual(stat.test1, label = "p.adj.signif",y.position = "y.position")+   
+  stat_compare_means(p.adjust.method = "BH",label = "p.signif",label.x = 1.5)+
+  theme_classic()+
+  theme(axis.text.x=element_blank(),legend.position = "none",axis.title.x = element_blank())+
+  scale_color_manual(values=colours.post_allo_index5_post)+
+  scale_y_continuous(expand = expansion(mult = .2))
+
+print(plot)
+
+}
+
+```
+
+
+
+
+
+
+## all pathways
+
+```{r loop pathways_all,fig.dim=c(4,4),out.width="70%"}
+
+tse.subset<-mia::agglomerateByRank(tse.humann_pathabundance,"Species")
+
+tse.subset<-tse.subset[,colData(tse.subset)$post_allo_index5_post%in% c("high_7_14","low_7_14")]
+
+mat<-t(assay(tse.subset,"relabundance"))
+metadata<-colData(tse.subset)
+df<-data.frame(cbind(mat,metadata)) %>% 
+  pivot_longer(cols = -all_of(colnames(metadata)))
+
+
+stat.test1<-df %>% 
+  group_by(name) %>% 
+  t_test(value ~ post_allo_index5_post,paired = F)%>%
+  adjust_pvalue(method = "BH") %>%
+  add_significance("p.adj")
+
+stat.test1<-stat.test1 %>%
+ add_xy_position(x = "post_allo_index5_post", fun = "mean_se", step.increase = 0)
+#https://github.com/kassambara/rstatix/issues/24
+
+plot<-df %>% 
+  filter(post_allo_index5_post %in% c("high_7_14","low_7_14")) %>% 
+  ggplot(aes(post_allo_index5_post,value,colour=post_allo_index5_post))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  facet_wrap_paginate(~name,scales="free",ncol=1,nrow=1)
+
+required_n_pages <- n_pages(plot)
+
+
+for(i in 1:required_n_pages){
+
+plot<-df %>% 
+  filter(post_allo_index5_post %in% c("high_7_14","low_7_14")) %>% 
+  ggplot(aes(post_allo_index5_post,value,colour=post_allo_index5_post))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  facet_wrap_paginate(~name,scales="free",ncol=1,nrow=1,page = i)+
+  ylab("Relative Abundance")+
+  #stat_pvalue_manual(stat.test1, label = "p.adj.signif",y.position = "y.position")+   
+  stat_compare_means(p.adjust.method = "BH",label = "p.signif",label.x = 1.5)+
+  theme_classic()+
+  theme(axis.text.x=element_blank(),legend.position = "none",axis.title.x = element_blank())+
+  scale_color_manual(values=colours.post_allo_index5_post)+
+  scale_y_continuous(expand = expansion(mult = .2))
+
+print(plot)
+
+}
+
+```
+
+
+
+# Selected Families_Lachnosporaceae_Oscilloscpiraceae
+
+## Maaslin2: pre_allo_factor1 selected_families
+
+```{r pre_allo_factor1 selected_families}
+#subset TSE by colData
+tse.subset<-tse.metaphlan[rowData(tse.metaphlan)$Family%in%selected_families,colData(tse.metaphlan)$pre_allo_factor1 %in% c("high_COND","high_7_14","low_COND","low_7_14")]
+
+#remove zOTUs with zero counts after subsetting
+tse.subset<-tse.subset[rowSums(assay(tse.subset, "counts")) > 0, ]
+
+
+# maaslin2
+
+# maaslin expects features as columns and samples as rows 
+# for both the asv/otu table as well as meta data 
+asv <- t(assay(tse.subset))
+meta_data <- data.frame(colData(tse.subset))
+# you can specifiy different GLMs/normalizations/transforms. We used similar
+# settings as in Nearing et al. (2021) here:
+fit_data_pre_allo_factor1_selected_families <- Maaslin2(
+  asv,
+  meta_data,
+  output = "maaslin2_pre_allo_factor1_selected_families",
+  transform = "LOG",
+  cores = 50,
+  fixed_effects = "pre_allo_factor1",
+  random_effects = c("Patient"), # you can also fit MLM by specifying random effects
+  # specifying a ref is especially important if you have more than 2 levels
+  reference = "pre_allo_factor1,high_COND",  
+  normalization = "NONE",
+  standardize = FALSE,
+  min_prevalence = 0 # prev filterin already done
+)
+# which genera are identified as differentially abundant? (leave out "head" to
+# see all)
+
+```
+
+```{r pre_allo_factor1 kable selected_families,results="asis"}
+
+tax<-rowData(tse.subset)
+tax$feature<-rownames(tax)
+res<-left_join(data.frame(fit_data_pre_allo_factor1_selected_families$results),tax,by="feature",copy=TRUE)
+
+kable(data.frame(filter(res, qval <= 0.25)),format = "html") %>% kable_styling(latex_options = "scale_down",font_size = 11) %>%kable_classic(full_width = F, html_font = "Cambria")
+
+```
+
+```{r maaslin2 sig features pre_allo_factor1 selected_families,results=T,eval=TRUE,fig.dim=c(12,10),out.width="100%"}
+
+
+sig_maaslin2<-filter(res, qval <= 0.25)
+mat<-assay(tse.subset,"counts")
+mat.selected<-mat[row.names(mat) %in% sig_maaslin2$feature,]
+mat_mapping<-cbind(t(mat.selected),data.frame(colData(tse.subset)))
+test<-pivot_longer(mat_mapping,cols = starts_with("s__")) %>% 
+  mutate(pre_allo_factor1=factor(pre_allo_factor1,levels=c("high_COND","low_COND","low_7_14")))
+
+
+
+
+p<-ggplot(test,aes(name,log(value+1),fill=pre_allo_factor1))
+p+geom_boxplot(outlier.shape = NA) +
+  coord_flip()+
+  #facet_wrap(~name,scales="free")+
+  geom_jitter()+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  xlab("Group")+
+  ylab("Relative Abundance")
+
+```
+
+```{r pheatmap species pre_allo_factor1 oscillo_lachno,eval=TRUE,fig.dim=c(7,7),out.width="100%"}
+
+sig_maaslin2<-filter(res, qval <= 0.25)
+
+tse.temp <- tse.subset[rownames(tse.subset)%in% sig_maaslin2$feature ,colData(tse.subset)$pre_allo_factor1 %in% c("high_COND","low_COND","low_7_14")]
+
+tse.temp<-tse.temp[rowSums(assay(tse.temp, "counts")) > 0, ]
+
+
+# Agglomerate tse.V3V4 by genus
+tse_genus <- agglomerateByRank(tse.temp,
+                               rank = "Species",
+                               onRankOnly = TRUE)
+
+# Takes subset: only samples from feces, skin, or tongue
+#tse_genus_subset <- tse_genus[ , colData(tse_genus)$sample_type %in% c("Feces", "Skin", "Tongue") ]
+tse_genus_subset<-tse_genus
+
+# Get n most abundant taxa, and subsets the data by them
+top_taxa <- getTopTaxa(tse_genus_subset, top = 20)
+tse_genus_subset <- tse_genus_subset[top_taxa, ]
+
+# Gets the assay table
+mat <- assay(tse_genus_subset)
+
+temp<-as_tibble(t(mat))
+temp$pre_allo_factor1<-colData(tse_genus_subset)$pre_allo_factor1
+
+t1<-temp %>%
+  dplyr::group_by(pre_allo_factor1) %>%
+  dplyr::summarise(dplyr::across(-starts_with("pre_allo_factor1"), mean, na.rm = TRUE))
+
+mat.grouped<-t(t1[,-1])
+mat.grouped<-mat.grouped %>% log1p() %>% compositions::scale(center=FALSE,scale=FALSE) %>%  as.data.frame()
+# Cluster Features / Taxa
+colnames(mat.grouped)<-t1$pre_allo_factor1
+
+# Hierarchical clustering
+taxa_hclust <- hclust(dist(mat), method = "complete")
+
+# Creates a phylogenetic tree
+taxa_tree <- ape::as.phylo(taxa_hclust)
+
+# Plot taxa tree
+taxa_tree <- ggtree(taxa_tree) + 
+  theme(plot.margin=margin(0,0,0,0)) # removes margins
+
+# Get order of taxa in plot
+taxa_ordered <- get_taxa_name(taxa_tree)
+
+# to view the tree, run
+# taxa_tree
+
+
+
+# Creates clusters (e.g. 3 clusters)
+taxa_clusters <- cutree(tree = taxa_hclust, k = 10)
+
+# Converts into data frame
+taxa_clusters <- data.frame(clusters = taxa_clusters)
+taxa_clusters$clusters <- factor(taxa_clusters$clusters)
+
+# Order data so that it's same as in phylo tree
+taxa_clusters <- taxa_clusters[taxa_ordered, , drop = FALSE] 
+
+# Prints taxa and their clusters
+taxa_clusters
+
+
+# Adds information to rowData
+rowData(tse_genus_subset)$clusters <- taxa_clusters[order(match(rownames(taxa_clusters), 
+                                                                rownames(tse_genus_subset))), ]
+
+
+# Get order of samples in plot
+samples_ordered <- c("high_COND","low_COND","low_7_14")
+
+# Converts into data frame
+sample_data <- data.frame(pre_allo_factor1 = samples_ordered)
+rownames(sample_data)<-sample_data$pre_allo_factor1
+
+# Order data based on 
+mat.grouped <- mat.grouped[,samples_ordered]
+
+
+# Determines the scaling of colorss
+# Scale colors
+breaks <- seq(-ceiling(max(abs(mat))), ceiling(max(abs(mat))), 
+              length.out = ifelse( max(abs(mat))>5, 2*ceiling(max(abs(mat))), 10 ) )
+colors <- colorRampPalette(c("darkblue", "blue", "white", "red", "darkred"))(length(breaks)-1)
+
+#ann_colours<-list(Timepoints=Timepoints.colours,Center = Center.colours)
+
+pheatmap(mat.grouped, 
+         #annotation_row = taxa_clusters, 
+         annotation_col = sample_data,
+         #breaks = breaks,
+         #color = colors,
+         scale="row",
+         cluster_cols = FALSE,
+         show_colnames=TRUE,
+         annotation_colors = list(pre_allo_factor1=colours.list.pre_allo_factor1)
+)
+
+```
+
+## Maaslin2: pre_allo_factor3 selected_families
+
+```{r pre_allo_factor3 selected_families}
+#subset TSE by colData
+tse.subset<-tse.metaphlan[rowData(tse.metaphlan)$Family%in%selected_families,colData(tse.metaphlan)$pre_allo_factor3 %in% c("high_COND","high_7_14","low_COND","low_7_14")]
+
+#remove zOTUs with zero counts after subsetting
+tse.subset<-tse.subset[rowSums(assay(tse.subset, "counts")) > 0, ]
+
+
+# maaslin2
+
+# maaslin expects features as columns and samples as rows 
+# for both the asv/otu table as well as meta data 
+asv <- t(assay(tse.subset))
+meta_data <- data.frame(colData(tse.subset))
+# you can specifiy different GLMs/normalizations/transforms. We used similar
+# settings as in Nearing et al. (2021) here:
+fit_data_pre_allo_factor3_selected_families <- Maaslin2(
+  asv,
+  meta_data,
+  output = "maaslin2_pre_allo_factor3_selected_families",
+  transform = "LOG",
+  cores = 50,
+  fixed_effects = "pre_allo_factor3",
+  random_effects = c("Patient"), # you can also fit MLM by specifying random effects
+  # specifying a ref is especially important if you have more than 2 levels
+  reference = "pre_allo_factor3,high_COND",  
+  normalization = "NONE",
+  standardize = FALSE,
+  min_prevalence = 0 # prev filterin already done
+)
+# which genera are identified as differentially abundant? (leave out "head" to
+# see all)
+
+```
+
+```{r pre_allo_factor3 kable selected_families,results="asis"}
+
+tax<-rowData(tse.subset)
+tax$feature<-rownames(tax)
+res<-left_join(data.frame(fit_data_pre_allo_factor3_selected_families$results),tax,by="feature",copy=TRUE)
+
+kable(data.frame(filter(res, qval <= 0.25)),format = "html") %>% kable_styling(latex_options = "scale_down",font_size = 11) %>%kable_classic(full_width = F, html_font = "Cambria")
+
+```
+
+```{r maaslin2 sig features pre_allo_factor3 selected_families,results=T,eval=TRUE,fig.dim=c(12,10),out.width="100%"}
+
+sig_maaslin2<-filter(res, qval <= 0.25)
+mat<-assay(tse.subset,"counts")
+mat.selected<-mat[row.names(mat) %in% sig_maaslin2$feature,]
+mat_mapping<-cbind(t(mat.selected),data.frame(colData(tse.subset)))
+test<-pivot_longer(mat_mapping,cols = starts_with("s__")) %>% 
+  mutate(pre_allo_factor3=factor(pre_allo_factor3,levels=c("high_COND","high_7_14","low_COND","low_7_14")))
+
+p<-ggplot(test,aes(name,log(value+1),fill=pre_allo_factor3))
+p+geom_boxplot(outlier.shape = NA) +
+  coord_flip()+
+  #facet_wrap(~name,scales="free")+
+  geom_jitter()+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=60,hjust=1))+
+  xlab("Group")+
+  ylab("Relative Abundance")
+
+```
+
+```{r pheatmap species pre_allo_factor3 oscillo_lachno,eval=TRUE,fig.dim=c(8,5),out.width="100%"}
+
+sig_maaslin2<-filter(res, qval <= 0.25)
+
+tse.temp <- tse.subset[rownames(tse.subset)%in% sig_maaslin2$feature ,colData(tse.subset)$pre_allo_factor3 %in% c("high_COND","high_7_14","low_COND","low_7_14")]
+
+tse.temp<-tse.temp[rowSums(assay(tse.temp, "counts")) > 0, ]
+
+
+# Agglomerate tse.V3V4 by genus
+tse_genus <- agglomerateByRank(tse.temp,
+                               rank = "Species",
+                               onRankOnly = TRUE)
+
+# Takes subset: only samples from feces, skin, or tongue
+#tse_genus_subset <- tse_genus[ , colData(tse_genus)$sample_type %in% c("Feces", "Skin", "Tongue") ]
+tse_genus_subset<-tse_genus
+
+# Get n most abundant taxa, and subsets the data by them
+top_taxa <- getTopTaxa(tse_genus_subset, top = 8)
+tse_genus_subset <- tse_genus_subset[top_taxa, ]
+
+# Gets the assay table
+mat <- assay(tse_genus_subset)
+
+temp<-as_tibble(t(mat))
+temp$pre_allo_factor3<-colData(tse_genus_subset)$pre_allo_factor3
+
+t1<-temp %>%
+  dplyr::group_by(pre_allo_factor3) %>%
+  dplyr::summarise(dplyr::across(-starts_with("pre_allo_factor3"), mean, na.rm = TRUE))
+
+mat.grouped<-t(t1[,-1])
+mat.grouped<-mat.grouped %>% log1p() %>% compositions::scale(center=FALSE,scale=FALSE) %>%  as.data.frame()
+# Cluster Features / Taxa
+colnames(mat.grouped)<-t1$pre_allo_factor3
+
+# Hierarchical clustering
+taxa_hclust <- hclust(dist(mat), method = "complete")
+
+# Creates a phylogenetic tree
+taxa_tree <- ape::as.phylo(taxa_hclust)
+
+# Plot taxa tree
+taxa_tree <- ggtree(taxa_tree) + 
+  theme(plot.margin=margin(0,0,0,0)) # removes margins
+
+# Get order of taxa in plot
+taxa_ordered <- get_taxa_name(taxa_tree)
+
+# to view the tree, run
+# taxa_tree
+
+
+
+# Creates clusters (e.g. 3 clusters)
+taxa_clusters <- cutree(tree = taxa_hclust, k = 7)
+
+# Converts into data frame
+taxa_clusters <- data.frame(clusters = taxa_clusters)
+taxa_clusters$clusters <- factor(taxa_clusters$clusters)
+
+# Order data so that it's same as in phylo tree
+taxa_clusters <- taxa_clusters[taxa_ordered, , drop = FALSE] 
+
+# Prints taxa and their clusters
+taxa_clusters
+
+
+# Adds information to rowData
+rowData(tse_genus_subset)$clusters <- taxa_clusters[order(match(rownames(taxa_clusters), 
+                                                                rownames(tse_genus_subset))), ]
+
+
+# Get order of samples in plot
+samples_ordered <- c("high_COND","high_7_14","low_COND","low_7_14")
+
+# Converts into data frame
+sample_data <- data.frame(pre_allo_factor3 = samples_ordered)
+rownames(sample_data)<-sample_data$pre_allo_factor3
+
+# Order data based on 
+mat.grouped <- mat.grouped[,samples_ordered]
+
+
+# Determines the scaling of colorss
+# Scale colors
+breaks <- seq(-ceiling(max(abs(mat))), ceiling(max(abs(mat))), 
+              length.out = ifelse( max(abs(mat))>5, 2*ceiling(max(abs(mat))), 10 ) )
+colors <- colorRampPalette(c("darkblue", "blue", "white", "red", "darkred"))(length(breaks)-1)
+
+#ann_colours<-list(Timepoints=Timepoints.colours,Center = Center.colours)
+
+pheatmap(mat.grouped, 
+         #annotation_row = taxa_clusters, 
+         annotation_col = sample_data,
+         #breaks = breaks,
+         #color = colors,
+         scale="row",
+         cluster_cols = FALSE,
+         show_colnames=TRUE,
+         annotation_colors = list(pre_allo_factor3=colours.list.pre_allo_factor3)
+)
+
+```
+
+# Humann Pathways Selection 2
+
+```{r pathway_selection 2,echo=TRUE}
+#SCFA
+butanoate_biosyn <- c("PWY_5022","PWY_5676","P162_PWY","GLUDEG_II_PWY","PWY_8190","P163_PWY","CENTFERM_PWY","PWY_5677")
+propanoate_pathways <- c("PWY_8086","PWY_7013","PWY_8188","PWY_5088","PWY_8377","PROPFERM_PWY")
+acetate_pathways <- c("PWY0_1312","PWY_5535","PWY_8328","PWY_5536","P161_PWY","P124_PWY","PWY_804","P461_PWY","P162_PWY","P163_PWY","PROPFERM_PWY")
+
+#Aminoacids:
+
+histidine_degrad<-c("PWY_5030","HISDEG_PWY")
+methionine_biosyn<-c("PWY_7977","HOMOSER_METSYN_PWY","HSERMETANA_PWY","METSYN_PWY","PWY_702","PWY_5345","PWY_5347")
+ornithin_biosyn<-c("ARGININE_SYN4_PWY","GLUTORN_PWY")
+citrulline_biosyn<-c("CITRULBIO_PWY")
+tryptophan_biosyn<-c("TRPSYN_PWY")
+arginine_biosyn<- c("ARGSYN_PWY","ARGSYNBSUB_PWY","PWY_5154","PWY_7400")
+glutamine_biosyn<-c("PWY_5505","PWY_6549")
+cysteine_biosyn<-c("PWY_6292","PWY_6293","SULFATE_CYS_PWY")
+
+#Purine
+adenosine_degrad<-c("PWY_6596","SALVADEHYPOX_PWY","PWY_6617") 
+guanosine_degrad<-c("PWY_6607","PWY_6606","PWY_6608","PWY_6595")
+
+#Pyrimiidine
+cytosine_degrad<-c("PWY_7209")
+thymidine_degrad<-c("PWY_6430")
+
+#B_Vitamin
+thiamin_biosyn<-c("THISYN_PWY","PWY_6895","THISYNARA_PWY","PWY_7282")
+biotin_biosyn<-c("PWY0_1507","PWY_7380","PWY_8128","BIOTIN_BIOSYNTHESIS_PWY","PWY_5005")
+folate_biosyn<-c("PWY_2161","PWY_2161B","PWY_6612","FOLSYN_PWY","PWY_6614","PWY2DNV_11","PWY_6613")
+
+#Bile Acid
+bile_acid_deconjugation<-c("PWY-8135")
+bile_acid_7a_dehydroxylation<-c("PWY_7754") #BAI Operon
+bile_acid_7b_dehydroxylation<-c("PWY-8134")
+bile_acid_iso_bile_hydroxysteroid_DH<-c("PWY-7756")
+
+#Pyruvate
+#pyruvate_fermentation
+
+#Starch
+starch_degradation<-c("PWY_6731")
+
+#Glycolysis
+glcolysis<-c("GLYCOLYSIS")
+
+
+
+all_selected_pathways<-c(butanoate_biosyn,propanoate_pathways,acetate_pathways,histidine_degrad,methionine_biosyn,ornithin_biosyn,citrulline_biosyn,tryptophan_biosyn,arginine_biosyn,glutamine_biosyn,cysteine_biosyn,adenosine_degrad,guanosine_degrad,cytosine_degrad,thymidine_degrad,thiamin_biosyn,biotin_biosyn,folate_biosyn,bile_acid_deconjugation,bile_acid_7a_dehydroxylation,bile_acid_7b_dehydroxylation,starch_degradation,glcolysis,bile_acid_iso_bile_hydroxysteroid_DH)
+
+```
+
+```{r new_selected_pathways_metacyc,fig.dim=c(19,18),out.width="100%"}
+
+tse.subset<-tse.humann_pathabundance[rowData(tse.humann_pathabundance)$value %in% all_selected_pathways,colData(tse.humann_pathabundance)$post_allo_index5_post %in% c("high_7_14","low_7_14")]
+
+tse.subset<-tse.subset[rowSums(assay(tse.subset, "counts")) > 0, ]
+
+temp<-meltAssay(tse.subset,abund_values = "relabundance",add_col_data = "post_allo_index5_post",add_row_data = c("value","path","Family","Genus","Species"))
+
+
+
+stat.test1<-temp %>% 
+  filter(post_allo_index5_post %in% c("high_7_14","low_7_14")) %>% 
+  group_by(FeatureID) %>% 
+  rstatix::wilcox_test(relabundance ~ post_allo_index5_post,paired = F)%>%
+  adjust_pvalue(method = "BH") %>%
+  add_significance("p.adj")
+
+stat.test1<-stat.test1 %>%
+  add_xy_position(x = "post_allo_index5_post", fun = "mean_se", step.increase = 0)
+#https://github.com/kassambara/rstatix/issues/24
+
+
+
+temp %>% 
+  ggplot(aes(post_allo_index5_post,relabundance,colour=post_allo_index5_post))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  facet_wrap(Genus~FeatureID,scales = "free")+
+  ylab("Relative Abundance")+
+  #stat_pvalue_manual(stat.test1, label = "p.adj.signif",y.position = "y.position")+   
+  stat_compare_means(p.adjust.method = "BH",label = "p.signif",label.x = 1.5)+
+  theme_classic()+
+  theme(axis.text.x=element_blank(),legend.position = "none")+
+  scale_color_manual(values=colours.post_allo_index5_post)+
+  scale_y_continuous(expand = expansion(mult = .2))
+
+
+```
+
+
+
+
+```{r new_selected_pathways_metacyc individual_plots,fig.dim=c(3,4),out.width="100%"}
+
+tse.subset<-tse.humann_pathabundance[rowData(tse.humann_pathabundance)$value %in% all_selected_pathways,colData(tse.humann_pathabundance)$post_allo_index5_post %in% c("high_7_14","low_7_14")]
+
+tse.subset<-tse.subset[rowSums(assay(tse.subset, "counts")) > 0, ]
+
+temp<-meltAssay(tse.subset,abund_values = "relabundance",add_col_data = "post_allo_index5_post",add_row_data = c("value","path","Family","Genus","Species"))
+
+
+
+stat.test1<-temp %>% 
+  filter(post_allo_index5_post %in% c("high_7_14","low_7_14")) %>% 
+  group_by(FeatureID) %>% 
+  rstatix::wilcox_test(relabundance ~ post_allo_index5_post,paired = F)%>%
+  adjust_pvalue(method = "BH") %>%
+  add_significance("p.adj")
+
+stat.test1<-stat.test1 %>%
+  add_xy_position(x = "post_allo_index5_post", fun = "mean_se", step.increase = 0)
+#https://github.com/kassambara/rstatix/issues/24
+
+
+
+plot<-temp %>% 
+  ggplot(aes(post_allo_index5_post,relabundance,colour=post_allo_index5_post))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  facet_wrap_paginate(Genus~FeatureID,scales = "free",ncol = 1,nrow = 1)+
+    ylab("Relative Abundance")+
+  #stat_pvalue_manual(stat.test1, label = "p.adj.signif",y.position = "y.position")+   
+  stat_compare_means(p.adjust.method = "BH",label = "p.signif",label.x = 1.5)+
+  theme_classic()+
+  theme(axis.text.x=element_blank(),legend.position = "none",axis.title.x = element_blank())+
+  scale_color_manual(values=colours.post_allo_index5_post)+
+  scale_y_continuous(expand = expansion(mult = .2))
+
+required_n_pages <- n_pages(plot)
+
+
+for(i in 1:required_n_pages){
+
+  plot<-temp %>% 
+  ggplot(aes(post_allo_index5_post,relabundance,colour=post_allo_index5_post))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  facet_wrap_paginate(Genus~FeatureID,scales = "free",page = i,ncol = 1,nrow = 1)+
+    ylab("Relative Abundance")+
+  #stat_pvalue_manual(stat.test1, label = "p.adj.signif",y.position = "y.position")+   
+  stat_compare_means(p.adjust.method = "BH",label = "p.signif",label.x = 1.5)+
+  theme_classic()+
+  theme(axis.text.x=element_blank(),legend.position = "none",axis.title.x = element_blank())+
+  scale_color_manual(values=colours.post_allo_index5_post)+
+  scale_y_continuous(expand = expansion(mult = .2))
+  
+print(plot)
+  
+}
+
+```
